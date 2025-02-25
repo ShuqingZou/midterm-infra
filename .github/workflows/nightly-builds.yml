@@ -83,6 +83,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Debug Instance IP
+        run: |
+          echo "Instance IP from ENV: ${{ env.instance_ip }}"
+
       - name: Wait for EC2 to be ready
         run: |
           sleep 60
