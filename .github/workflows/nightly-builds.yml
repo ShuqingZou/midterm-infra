@@ -32,7 +32,7 @@ jobs:
             --security-group-ids sg-03a57241aa0650326 \
             --subnet-id subnet-037010f619e30f145 \
             --associate-public-ip-address \
-            --iam-instance-profile Name=EMR_EC2_DefaultRole \
+            --iam-instance-profile Arn=arn:aws:iam::910051580567:role/EMR_EC2_DefaultRole \
             --query 'Instances[0].InstanceId' \
             --output text)
 
