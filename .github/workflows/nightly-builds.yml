@@ -63,13 +63,6 @@ jobs:
           echo "Instance ID (Output): ${{ steps.create.outputs.instance_id }}"
           echo "Instance IP (Output): ${{ steps.create.outputs.instance_ip }}"
 
-
-      - name: Debug Environment Variables
-        run: |
-          echo "Instance ID in GITHUB_ENV: ${{ env.instance_id }}"
-          echo "Instance IP in GITHUB_ENV: ${{ env.instance_ip }}"
-
-
   build-and-test:
     needs: create-ec2
     runs-on: ubuntu-latest
@@ -118,11 +111,15 @@ jobs:
           username: ubuntu
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           script: |
-            sudo apt update && sudo apt install -y docker.io
-            docker-compose up -d
+            sudo apt update && sudo apt install -y docker.io docker-compose
+            sudo systemctl start docker
             sleep 10
+            docker-compose up -d
+            sleep 20 
+            docker-compose ps
             curl -f http://localhost:8800/ || exit 1
             curl -f http://localhost:8800/books || exit 1
+  
 
   cleanup:
     needs: smoke-test
