@@ -1,0 +1,91 @@
+name: Nightly Build and Deployment
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Repo
+        uses: actions/checkout@v4
+        with:
+          repository: your-username/source-repo
+          token: ${{ secrets.SOURCE_REPO_PAT }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install Docker Compose
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y docker-compose
+
+      - name: Build and tag backend Docker image
+        run: |
+          docker build -t backend-nightly:latest ./backend
+
+      - name: Build and tag frontend Docker image
+        run: |
+          docker build -t frontend-nightly:latest ./frontend
+
+      - name: Run Smoke Test
+        run: |
+          docker-compose up -d
+          sleep 10
+          curl -f http://localhost:8800/ || exit 1
+          curl -f http://localhost:8800/books || exit 1
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Push images to AWS ECR
+        run: |
+          BACKEND_REPO_URI = 910051580567.dkr.ecr.us-east-1.amazonaws.com/backend-nightly
+          FRONTEND_REPO_URI = 910051580567.dkr.ecr.us-east-1.amazonaws.com/frontend-nightly
+          
+          docker tag backend-nightly:latest $BACKEND_REPO_URI:latest
+          docker push $BACKEND_REPO_URI:latest
+
+          docker tag frontend-nightly:latest $FRONTEND_REPO_URI:latest
+          docker push $FRONTEND_REPO_URI:latest
+
+  deploy:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: SSH into EC2 and deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          script: |
+            sudo docker pull your-account-id.dkr.ecr.your-region.amazonaws.com/your-repo-name/backend-nightly:latest
+            sudo docker pull your-account-id.dkr.ecr.your-region.amazonaws.com/your-repo-name/frontend-nightly:latest
+            docker-compose down
+            docker-compose up -d
+
+  notify-failure:
+    if: failure()
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send failure email notification
+        run: |
+          curl --url "smtp://smtp.ethereal.email:587" --ssl-reqd \
+          --mail-from "bryana.fay71@ethereal.email" \
+          --mail-rcpt "qa-team@example.com" \
+          --user "bryana.fay71@ethereal.email:6XF4g3kB5xSBngJxBt" \
+          --upload-file - <<EOF
+          From: BryanaFay <bryana.fay71@ethereal.email>
+          To: QA Team <qa-team@example.com>
+          Subject: Nightly Build Failed!
+          
+          The nightly build has failed. Please check the GitHub Actions logs for details.
+          EOF
