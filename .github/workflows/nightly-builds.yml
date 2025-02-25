@@ -50,7 +50,7 @@ jobs:
       - name: Checkout Source Repo
         uses: actions/checkout@v4
         with:
-          repository: your-username/midterm-source
+          repository: ShuqingZou/midterm-source
           token: ${{ secrets.SOURCE_REPO_PAT }}
 
       - name: Set up Docker Buildx
@@ -92,7 +92,7 @@ jobs:
             curl -f http://localhost:8800/books || exit 1
 
   cleanup:
-    needs: smoke-test
+    needs: create-ec2
     runs-on: ubuntu-latest
 
     steps:
