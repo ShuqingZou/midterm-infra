@@ -13,10 +13,18 @@ jobs:
       instance_ip: ${{ steps.create.outputs.instance_ip }}
 
     steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
       - name: Launch temporary EC2 instance
         id: create
         run: |
           INSTANCE_DETAILS=$(aws ec2 run-instances \
+            --region us-east-1 \
             --image-id ami-04b4f1a9cf54c11d0 \
             --instance-type t3.micro \
             --key-name midterm-key \
