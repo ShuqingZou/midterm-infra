@@ -35,14 +35,22 @@ jobs:
             --query 'Instances[0].InstanceId' \
             --output text)
 
-          echo "Waiting for EC2 instance to get Public IP..."
-          sleep 20
+          echo "Waiting for EC2 instance ($INSTANCE_ID) to get Public IP..."
 
-          INSTANCE_IP=$(aws ec2 describe-instances \
-            --region us-east-1 \
-            --instance-ids $INSTANCE_ID \
-            --query 'Reservations[0].Instances[0].PublicDnsName' \
-            --output text)
+          while true; do
+            INSTANCE_IP=$(aws ec2 describe-instances \
+              --region us-east-1 \
+              --instance-ids $INSTANCE_ID \
+              --query 'Reservations[0].Instances[0].PublicIpAddress' \
+              --output text)
+
+            if [[ "$INSTANCE_IP" != "None" ]]; then
+              break
+            fi
+
+            echo "Waiting for Public IP..."
+            sleep 5
+          done
 
           echo "Instance ID: $INSTANCE_ID"
           echo "Instance IP: $INSTANCE_IP"
@@ -85,6 +93,7 @@ jobs:
     steps:
       - name: Debug Instance IP
         run: |
+          echo "Instance ID from ENV: ${{ env.instance_id }}"
           echo "Instance IP from ENV: ${{ env.instance_ip }}"
 
       - name: Wait for EC2 to be ready
