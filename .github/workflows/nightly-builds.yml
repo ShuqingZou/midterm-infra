@@ -6,86 +6,60 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-and-test:
+  create-ec2:
+    runs-on: ubuntu-latest
+    outputs:
+      instance_id: ${{ steps.create.outputs.instance_id }}
+      instance_ip: ${{ steps.create.outputs.instance_ip }}
+
+    steps:
+      - name: Launch temporary EC2 instance
+        id: create
+        run: |
+          INSTANCE_DETAILS=$(aws ec2 run-instances \
+            --image-id ami-04b4f1a9cf54c11d0 \
+            --instance-type t3.micro \
+            --key-name midterm-key \
+            --security-group-ids sg-03a57241aa0650326 \
+            --subnet-id subnet-037010f619e30f145 \
+            --query 'Instances[0].[InstanceId, PublicIpAddress]' \
+            --output text)
+
+          INSTANCE_ID=$(echo "$INSTANCE_DETAILS" | awk '{print $1}')
+          INSTANCE_IP=$(echo "$INSTANCE_DETAILS" | awk '{print $2}')
+
+          echo "Instance ID: $INSTANCE_ID"
+          echo "Instance IP: $INSTANCE_IP"
+          echo "instance_id=$INSTANCE_ID" >> $GITHUB_ENV
+          echo "instance_ip=$INSTANCE_IP" >> $GITHUB_ENV
+
+  smoke-test:
+    needs: create-ec2
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Source Repo
-        uses: actions/checkout@v4
-        with:
-          repository: your-username/source-repo
-          token: ${{ secrets.SOURCE_REPO_PAT }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Install Docker Compose
+      - name: Wait for EC2 to be ready
         run: |
-          sudo apt-get update
-          sudo apt-get install -y docker-compose
+          sleep 60
 
-      - name: Build and tag backend Docker image
-        run: |
-          docker build -t backend-nightly:latest ./backend
-
-      - name: Build and tag frontend Docker image
-        run: |
-          docker build -t frontend-nightly:latest ./frontend
-
-      - name: Run Smoke Test
-        run: |
-          docker-compose up -d
-          sleep 10
-          curl -f http://localhost:8800/ || exit 1
-          curl -f http://localhost:8800/books || exit 1
-
-      - name: Log in to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Push images to AWS ECR
-        run: |
-          BACKEND_REPO_URI = 910051580567.dkr.ecr.us-east-1.amazonaws.com/backend-nightly
-          FRONTEND_REPO_URI = 910051580567.dkr.ecr.us-east-1.amazonaws.com/frontend-nightly
-          
-          docker tag backend-nightly:latest $BACKEND_REPO_URI:latest
-          docker push $BACKEND_REPO_URI:latest
-
-          docker tag frontend-nightly:latest $FRONTEND_REPO_URI:latest
-          docker push $FRONTEND_REPO_URI:latest
-
-  deploy:
-    needs: build-and-test
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: SSH into EC2 and deploy
+      - name: SSH into EC2 and run Smoke Test
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.EC2_HOST }}
+          host: ${{ env.instance_ip }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           script: |
-            sudo docker pull your-account-id.dkr.ecr.your-region.amazonaws.com/your-repo-name/backend-nightly:latest
-            sudo docker pull your-account-id.dkr.ecr.your-region.amazonaws.com/your-repo-name/frontend-nightly:latest
-            docker-compose down
+            sudo apt update && sudo apt install -y docker.io
             docker-compose up -d
+            sleep 10
+            curl -f http://localhost:8800/ || exit 1
+            curl -f http://localhost:8800/books || exit 1
 
-  notify-failure:
-    if: failure()
-    needs: build-and-test
+  cleanup:
+    needs: smoke-test
     runs-on: ubuntu-latest
+
     steps:
-      - name: Send failure email notification
+      - name: Terminate temporary EC2 instance
         run: |
-          curl --url "smtp://smtp.ethereal.email:587" --ssl-reqd \
-          --mail-from "bryana.fay71@ethereal.email" \
-          --mail-rcpt "qa-team@example.com" \
-          --user "bryana.fay71@ethereal.email:6XF4g3kB5xSBngJxBt" \
-          --upload-file - <<EOF
-          From: BryanaFay <bryana.fay71@ethereal.email>
-          To: QA Team <qa-team@example.com>
-          Subject: Nightly Build Failed!
-          
-          The nightly build has failed. Please check the GitHub Actions logs for details.
-          EOF
+          aws ec2 terminate-instances --instance-ids ${{ env.instance_id }}
