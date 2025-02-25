@@ -33,8 +33,35 @@ jobs:
           echo "instance_id=$INSTANCE_ID" >> $GITHUB_ENV
           echo "instance_ip=$INSTANCE_IP" >> $GITHUB_ENV
 
-  smoke-test:
+  build-and-test:
     needs: create-ec2
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Repo
+        uses: actions/checkout@v4
+        with:
+          repository: your-username/midterm-source
+          token: ${{ secrets.SOURCE_REPO_PAT }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install Docker Compose
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y docker-compose
+
+      - name: Build and tag backend Docker image
+        run: |
+          docker build -t backend-nightly:latest ./backend
+
+      - name: Build and tag frontend Docker image
+        run: |
+          docker build -t frontend-nightly:latest ./frontend
+
+  smoke-test:
+    needs: build-and-test
     runs-on: ubuntu-latest
 
     steps:
