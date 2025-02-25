@@ -24,7 +24,7 @@ jobs:
       - name: Launch temporary EC2 instance
         id: create
         run: |
-          INSTANCE_DETAILS=$(aws ec2 run-instances \
+          INSTANCE_ID=$(aws ec2 run-instances \
             --region us-east-1 \
             --image-id ami-04b4f1a9cf54c11d0 \
             --instance-type t3.micro \
@@ -32,16 +32,24 @@ jobs:
             --security-group-ids sg-03a57241aa0650326 \
             --subnet-id subnet-037010f619e30f145 \
             --associate-public-ip-address \
-            --query 'Instances[0].[InstanceId, PublicDnsName]' \
+            --query 'Instances[0].InstanceId' \
             --output text)
 
-          INSTANCE_ID=$(echo "$INSTANCE_DETAILS" | awk '{print $1}')
-          INSTANCE_IP=$(echo "$INSTANCE_DETAILS" | awk '{print $2}')
+          echo "Waiting for EC2 instance to get Public IP..."
+          sleep 20
+
+          INSTANCE_IP=$(aws ec2 describe-instances \
+            --region us-east-1 \
+            --instance-ids $INSTANCE_ID \
+            --query 'Reservations[0].Instances[0].PublicDnsName' \
+            --output text)
 
           echo "Instance ID: $INSTANCE_ID"
           echo "Instance IP: $INSTANCE_IP"
+
           echo "instance_id=$INSTANCE_ID" >> $GITHUB_ENV
           echo "instance_ip=$INSTANCE_IP" >> $GITHUB_ENV
+
 
   build-and-test:
     needs: create-ec2
