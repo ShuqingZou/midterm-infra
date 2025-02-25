@@ -111,15 +111,29 @@ jobs:
           username: ubuntu
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           script: |
-            sudo apt update && sudo apt install -y docker.io docker-compose
+            sudo apt update && sudo apt install -y docker.io docker-compose git
             sudo systemctl start docker
             sleep 10
+
+            if [ ! -d "/home/ubuntu/midterm-source" ]; then
+              git clone https://github.com/ShuqingZou/midterm-source.git /home/ubuntu/midterm-source
+            fi
+
+            cd /home/ubuntu/midterm-source
+            git pull origin main
+            
             docker-compose up -d
             sleep 20 
-            docker-compose ps
+
+            echo "Checking running containers..."
+            docker ps -a
+
+            echo "Checking backend logs..."
+            docker logs $(docker ps -q --filter ancestor=backend-nightly:latest)
+
+            echo "Running Smoke Tests..."
             curl -f http://localhost:8800/ || exit 1
             curl -f http://localhost:8800/books || exit 1
-  
 
   cleanup:
     needs: smoke-test
