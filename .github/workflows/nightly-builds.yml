@@ -35,20 +35,20 @@ jobs:
             --query 'Instances[0].InstanceId' \
             --output text)
 
-          echo "Waiting for EC2 instance ($INSTANCE_ID) to get Public IP..."
+          echo "Waiting for EC2 instance ($INSTANCE_ID) to get Public DNS..."
 
           while true; do
             INSTANCE_IP=$(aws ec2 describe-instances \
               --region us-east-1 \
               --instance-ids $INSTANCE_ID \
-              --query 'Reservations[0].Instances[0].PublicIpAddress' \
+              --query 'Reservations[0].Instances[0].PublicDnsName' \
               --output text)
 
-            if [[ "$INSTANCE_IP" != "None" ]]; then
+            if [[ "$INSTANCE_IP" != "None" && "$INSTANCE_IP" != "" ]]; then
               break
             fi
 
-            echo "Waiting for Public IP..."
+            echo "Waiting for Public DNS..."
             sleep 5
           done
 
@@ -57,6 +57,11 @@ jobs:
 
           echo "instance_id=$INSTANCE_ID" >> $GITHUB_ENV
           echo "instance_ip=$INSTANCE_IP" >> $GITHUB_ENV
+
+      - name: Debug Environment Variables
+        run: |
+          echo "Instance ID in GITHUB_ENV: ${{ env.instance_id }}"
+          echo "Instance IP in GITHUB_ENV: ${{ env.instance_ip }}"
 
 
   build-and-test:
@@ -91,10 +96,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Debug Instance IP
+      - name: Debug Instance IP in smoke-test
         run: |
-          echo "Instance ID from ENV: ${{ env.instance_id }}"
-          echo "Instance IP from ENV: ${{ env.instance_ip }}"
+          echo "Instance ID in smoke-test: ${{ env.instance_id }}"
+          echo "Instance IP in smoke-test: ${{ env.instance_ip }}"
 
       - name: Wait for EC2 to be ready
         run: |
