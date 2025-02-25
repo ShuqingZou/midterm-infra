@@ -31,6 +31,7 @@ jobs:
             --key-name midterm-key \
             --security-group-ids sg-03a57241aa0650326 \
             --subnet-id subnet-037010f619e30f145 \
+            --associate-public-ip-address \
             --query 'Instances[0].[InstanceId, PublicIpAddress]' \
             --output text)
 
