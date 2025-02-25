@@ -92,10 +92,10 @@ jobs:
             curl -f http://localhost:8800/books || exit 1
 
   cleanup:
-    needs: create-ec2
+    needs: smoke-test
     runs-on: ubuntu-latest
 
     steps:
       - name: Terminate temporary EC2 instance
         run: |
-          aws ec2 terminate-instances --instance-ids ${{ env.instance_id }}
+          aws ec2 terminate-instances --region us-east-1 --instance-ids ${{ env.instance_id }}
