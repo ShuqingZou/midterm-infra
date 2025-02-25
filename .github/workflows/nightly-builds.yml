@@ -55,8 +55,14 @@ jobs:
           echo "Instance ID: $INSTANCE_ID"
           echo "Instance IP: $INSTANCE_IP"
 
-          echo "instance_id=$INSTANCE_ID" >> $GITHUB_ENV
-          echo "instance_ip=$INSTANCE_IP" >> $GITHUB_ENV
+          echo "::set-output name=instance_id::$INSTANCE_ID"
+          echo "::set-output name=instance_ip::$INSTANCE_IP"
+
+      - name: Debug Outputs
+        run: |
+          echo "Instance ID (Output): ${{ steps.create.outputs.instance_id }}"
+          echo "Instance IP (Output): ${{ steps.create.outputs.instance_ip }}"
+
 
       - name: Debug Environment Variables
         run: |
@@ -92,14 +98,14 @@ jobs:
           docker build -t frontend-nightly:latest ./frontend
 
   smoke-test:
-    needs: build-and-test
+    needs: create-ec2
     runs-on: ubuntu-latest
 
     steps:
       - name: Debug Instance IP in smoke-test
         run: |
-          echo "Instance ID in smoke-test: ${{ env.instance_id }}"
-          echo "Instance IP in smoke-test: ${{ env.instance_ip }}"
+          echo "Instance ID in smoke-test: ${{ needs.create-ec2.outputs.instance_id }}"
+          echo "Instance IP in smoke-test: ${{ needs.create-ec2.outputs.instance_ip }}"
 
       - name: Wait for EC2 to be ready
         run: |
@@ -108,7 +114,7 @@ jobs:
       - name: SSH into EC2 and run Smoke Test
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ env.instance_ip }}
+          host: ${{ needs.create-ec2.outputs.instance_ip }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           script: |
