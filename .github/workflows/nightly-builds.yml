@@ -98,7 +98,7 @@ jobs:
           docker build -t frontend-nightly:latest ./frontend
 
   smoke-test:
-    needs: create-ec2
+    needs: [create-ec2, build-and-test]
     runs-on: ubuntu-latest
 
     steps:
