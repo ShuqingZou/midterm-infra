@@ -69,7 +69,7 @@ jobs:
           repository: ShuqingZou/midterm-source
           token: ${{ secrets.SOURCE_REPO_PAT }}
 
-      - name: Set up Docker Buildx
+      - name: Set up Docker Build
         uses: docker/setup-buildx-action@v3
 
       - name: Install Docker Compose
@@ -79,11 +79,22 @@ jobs:
 
       - name: Build and tag backend Docker image
         run: |
-          sudo docker build -t backend-nightly:latest ./backend
+          docker build -t backend-nightly:latest ./backend
+          docker save -o backend-nightly.tar backend-nightly:latest
 
       - name: Build and tag frontend Docker image
         run: |
-          sudo docker build -t frontend-nightly:latest ./frontend
+          docker build -t frontend-nightly:latest ./frontend
+          docker save -o frontend-nightly.tar frontend-nightly:latest
+
+      - name: Upload Docker Images as Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: docker-images
+          path: |
+            backend-nightly.tar
+            frontend-nightly.tar
+  
 
   smoke-test:
     needs: [create-ec2, build-and-test]
@@ -96,8 +107,7 @@ jobs:
           echo "Instance IP in smoke-test: ${{ needs.create-ec2.outputs.instance_ip }}"
 
       - name: Wait for EC2 to be ready
-        run: |
-          sleep 60
+        run: sleep 60
 
       - name: SSH into EC2 and run Smoke Test
         uses: appleboy/ssh-action@v1.0.3
@@ -119,32 +129,46 @@ jobs:
             cd /home/ubuntu/midterm-source
             git pull origin main
 
+            echo "Logging in to Amazon ECR"
+            aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 910051580567.dkr.ecr.us-east-1.amazonaws.com
+
+            echo "Pulling latest Docker images from ECR"
+            docker pull 910051580567.dkr.ecr.us-east-1.amazonaws.com/backend-nightly:latest
+            docker pull 910051580567.dkr.ecr.us-east-1.amazonaws.com/frontend-nightly:latest
+
             export DB_HOST="mysql-db.cdegrojvvejq.us-east-1.rds.amazonaws.com"
             export DB_USER="root"
             export DB_PASSWORD="164450zsq"
             export DB_NAME="test"
             export DB_PORT="3306"
 
-            echo "DB_HOST is set to: $DB_HOST"
-
-            sudo docker-compose up -d
-            sleep 20 
+            echo "Starting services with Docker Compose..."
+            docker-compose up -d
 
             echo "Checking running containers..."
-            sudo docker ps -a
-
-            echo "Checking backend logs..."
-            sudo docker logs $(sudo docker ps -q --filter ancestor=backend-nightly:latest)
+            docker ps -a
 
             echo "Running Smoke Tests..."
             curl -f http://localhost:8800/ || exit 1
             curl -f http://localhost:8800/books || exit 1
+  
+  
 
   push-to-ecr:
     needs: smoke-test
     runs-on: ubuntu-latest
 
     steps:
+      - name: Download Docker Images
+        uses: actions/download-artifact@v3
+        with:
+          name: docker-images
+
+      - name: Load Docker Images
+        run: |
+          docker load -i backend-nightly.tar
+          docker load -i frontend-nightly.tar
+
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
@@ -166,6 +190,7 @@ jobs:
         run: |
           docker tag frontend-nightly:latest 910051580567.dkr.ecr.us-east-1.amazonaws.com/frontend-nightly:latest
           docker push 910051580567.dkr.ecr.us-east-1.amazonaws.com/frontend-nightly:latest
+
 
   deploy-to-qa:
     needs: [create-ec2, push-to-ecr]
@@ -193,11 +218,12 @@ jobs:
             docker pull 910051580567.dkr.ecr.us-east-1.amazonaws.com/backend-nightly:latest
             docker pull 910051580567.dkr.ecr.us-east-1.amazonaws.com/frontend-nightly:latest
 
-            echo "Stopping existing containers"
-            docker stop backend-container || true
-            docker stop frontend-container || true
-            docker rm backend-container || true
-            docker rm frontend-container || true
+            echo "Stopping and removing old containers"
+            docker stop backend-container frontend-container || true
+            docker rm backend-container frontend-container || true
+
+            echo "Removing unused images to free space"
+            docker system prune -af || true
 
             echo "Starting new containers"
             docker run -d --name backend-container -p 8800:8800 -e DB_HOST="mysql-db.cdegrojvvejq.us-east-1.rds.amazonaws.com" \
@@ -208,3 +234,4 @@ jobs:
               910051580567.dkr.ecr.us-east-1.amazonaws.com/frontend-nightly:latest
 
             echo "Deployment completed!"
+
