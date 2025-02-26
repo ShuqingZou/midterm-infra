@@ -140,11 +140,71 @@ jobs:
             curl -f http://localhost:8800/ || exit 1
             curl -f http://localhost:8800/books || exit 1
 
-  cleanup:
+  push-to-ecr:
     needs: smoke-test
     runs-on: ubuntu-latest
 
     steps:
-      - name: Terminate temporary EC2 instance
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+
+      - name: Log in to Amazon ECR
         run: |
-          aws ec2 terminate-instances --region us-east-1 --instance-ids ${{ needs.create-ec2.outputs.instance_id }}
+          aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 910051580567.dkr.ecr.us-east-1.amazonaws.com
+
+      - name: Tag and Push Backend Image
+        run: |
+          docker tag backend-nightly:latest <YOUR_AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/backend-nightly:latest
+          docker push 910051580567.dkr.ecr.us-east-1.amazonaws.com/backend-nightly:latest
+
+      - name: Tag and Push Frontend Image
+        run: |
+          docker tag frontend-nightly:latest <YOUR_AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/frontend-nightly:latest
+          docker push 910051580567.dkr.ecr.us-east-1.amazonaws.com/frontend-nightly:latest
+
+  deploy-to-qa:
+    needs: [create-ec2, push-to-ecr]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Debug Deployment Instance
+        run: |
+          echo "Deploying to QA Server: ${{ needs.create-ec2.outputs.instance_ip }}"
+
+      - name: Set instance_ip as environment variable
+        run: echo "INSTANCE_IP=${{ needs.create-ec2.outputs.instance_ip }}" >> $GITHUB_ENV
+
+      - name: SSH into QA EC2 and Deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: "${{ env.INSTANCE_IP }}"
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          script: |
+            echo "Logging in to Amazon ECR"
+            aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 910051580567.dkr.ecr.us-east-1.amazonaws.com
+
+            echo "Pulling latest images from ECR"
+            docker pull 910051580567.dkr.ecr.us-east-1.amazonaws.com/backend-nightly:latest
+            docker pull 910051580567.dkr.ecr.us-east-1.amazonaws.com/frontend-nightly:latest
+
+            echo "Stopping existing containers"
+            docker stop backend-container || true
+            docker stop frontend-container || true
+            docker rm backend-container || true
+            docker rm frontend-container || true
+
+            echo "Starting new containers"
+            docker run -d --name backend-container -p 8800:8800 -e DB_HOST="mysql-db.cdegrojvvejq.us-east-1.rds.amazonaws.com" \
+              -e DB_USER="root" -e DB_PASSWORD="164450zsq" -e DB_NAME="test" -e DB_PORT="3306" \
+              910051580567.dkr.ecr.us-east-1.amazonaws.com/backend-nightly:latest
+
+            docker run -d --name frontend-container -p 3000:3000 \
+              910051580567.dkr.ecr.us-east-1.amazonaws.com/frontend-nightly:latest
+
+            echo "Deployment completed!"
