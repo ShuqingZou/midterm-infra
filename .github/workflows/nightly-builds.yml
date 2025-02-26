@@ -116,43 +116,48 @@ jobs:
           username: ubuntu
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           script: |
-            sudo apt update && sudo apt install -y docker.io docker-compose git
-            sudo systemctl start docker
-            sudo usermod -aG docker $USER
+            echo "Installing dependencies..."
+            sudo apt update
+            sudo apt install -y docker.io docker-compose awscli git
+
+            echo "Fixing Docker permissions..."
+            sudo usermod -aG docker ubuntu
+            sudo chmod 666 /var/run/docker.sock
             newgrp docker
-            sleep 10
 
-            if [ ! -d "/home/ubuntu/midterm-source" ]; then
-              git clone https://github.com/ShuqingZou/midterm-source.git /home/ubuntu/midterm-source
-            fi
-
-            cd /home/ubuntu/midterm-source
-            git pull origin main
-
-            echo "Logging in to Amazon ECR"
+            echo "Logging in to Amazon ECR..."
             aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 910051580567.dkr.ecr.us-east-1.amazonaws.com
 
-            echo "Pulling latest Docker images from ECR"
+            echo "Pulling latest Docker images from ECR..."
             docker pull 910051580567.dkr.ecr.us-east-1.amazonaws.com/backend-nightly:latest
             docker pull 910051580567.dkr.ecr.us-east-1.amazonaws.com/frontend-nightly:latest
 
-            export DB_HOST="mysql-db.cdegrojvvejq.us-east-1.rds.amazonaws.com"
-            export DB_USER="root"
-            export DB_PASSWORD="164450zsq"
-            export DB_NAME="test"
-            export DB_PORT="3306"
-
             echo "Starting services with Docker Compose..."
-            docker-compose up -d
+            sudo docker-compose up -d
 
-            echo "Checking running containers..."
-            docker ps -a
+            echo "Waiting for backend to start..."
+            for i in {1..10}; do
+              if curl -f http://localhost:8800/; then
+                echo "✅ Backend is up!"
+                break
+              fi
+              echo "⏳ Waiting for backend..."
+              sleep 5
+            done
 
-            echo "Running Smoke Tests..."
-            curl -f http://localhost:8800/ || exit 1
-            curl -f http://localhost:8800/books || exit 1
-  
-  
+            echo "Waiting for frontend to start..."
+            for i in {1..10}; do
+              if curl -f http://localhost:3000/; then
+                echo "✅ Frontend is up!"
+                exit 0
+              fi
+              echo "⏳ Waiting for frontend..."
+              sleep 5
+            done
+
+            echo "❌ Frontend failed to start."
+            exit 1
+
 
   push-to-ecr:
     needs: smoke-test
