@@ -58,11 +58,6 @@ jobs:
           echo "::set-output name=instance_id::$INSTANCE_ID"
           echo "::set-output name=instance_ip::$INSTANCE_IP"
 
-      - name: Debug Outputs
-        run: |
-          echo "Instance ID (Output): ${{ steps.create.outputs.instance_id }}"
-          echo "Instance IP (Output): ${{ steps.create.outputs.instance_ip }}"
-
   build-and-test:
     needs: create-ec2
     runs-on: ubuntu-latest
@@ -84,11 +79,11 @@ jobs:
 
       - name: Build and tag backend Docker image
         run: |
-          docker build -t backend-nightly:latest ./backend
+          sudo docker build -t backend-nightly:latest ./backend
 
       - name: Build and tag frontend Docker image
         run: |
-          docker build -t frontend-nightly:latest ./frontend
+          sudo docker build -t frontend-nightly:latest ./frontend
 
   smoke-test:
     needs: [create-ec2, build-and-test]
@@ -113,6 +108,8 @@ jobs:
           script: |
             sudo apt update && sudo apt install -y docker.io docker-compose git
             sudo systemctl start docker
+            sudo usermod -aG docker $USER
+            newgrp docker
             sleep 10
 
             if [ ! -d "/home/ubuntu/midterm-source" ]; then
@@ -130,14 +127,14 @@ jobs:
 
             echo "DB_HOST is set to: $DB_HOST"
 
-            docker-compose up -d
+            sudo docker-compose up -d
             sleep 20 
 
             echo "Checking running containers..."
-            docker ps -a
+            sudo docker ps -a
 
             echo "Checking backend logs..."
-            docker logs $(docker ps -q --filter ancestor=backend-nightly:latest)
+            sudo docker logs $(sudo docker ps -q --filter ancestor=backend-nightly:latest)
 
             echo "Running Smoke Tests..."
             curl -f http://localhost:8800/ || exit 1
