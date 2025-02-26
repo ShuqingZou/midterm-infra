@@ -116,8 +116,11 @@ jobs:
           username: ubuntu
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           script: |
-            echo "Installing AWS CLI..."
+            echo "Installing dependencies..."
             sudo apt update
+            sudo apt install -y unzip ca-certificates curl gnupg awscli
+
+            echo "Installing AWS CLI..."
             curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
             unzip awscliv2.zip
             sudo ./aws/install
@@ -136,9 +139,10 @@ jobs:
             sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
             echo "Fixing Docker permissions..."
-            sudo groupadd docker
+            sudo groupadd docker || true
             sudo usermod -aG docker ubuntu
-            sudo systemctl restart docker
+            sudo systemctl enable docker
+            sudo systemctl start docker
             sudo chmod 666 /var/run/docker.sock
             newgrp docker
 
@@ -150,7 +154,7 @@ jobs:
             docker pull 910051580567.dkr.ecr.us-east-1.amazonaws.com/frontend-nightly:latest
 
             echo "Starting services with Docker Compose..."
-            sudo docker-compose up -d
+            sudo docker compose up -d
 
             echo "Waiting for backend to start..."
             for i in {1..10}; do
