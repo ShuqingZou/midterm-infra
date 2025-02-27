@@ -190,8 +190,53 @@ jobs:
           docker push 910051580567.dkr.ecr.us-east-1.amazonaws.com/bookapp/frontend:latest
   
 
-  cleanup:
+  deploy-qa:
     needs: push-to-ecr
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: SSH into QA EC2 and Deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.QA_EC2_IP }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          script: |
+            echo "Updating system..."
+            sudo apt update && sudo apt install -y docker.io docker-compose awscli
+            sudo systemctl start docker
+
+            echo "Logging into Amazon ECR..."
+            aws ecr get-login-password --region us-east-1 | sudo docker login --username AWS --password-stdin 910051580567.dkr.ecr.us-east-1.amazonaws.com
+            
+            echo "Navigating to deploy directory..."
+            cd /home/ubuntu/deploy
+
+            echo "Stopping existing containers..."
+            sudo docker-compose down || true
+
+            echo "Pulling latest images..."
+            sudo docker-compose pull
+
+            echo "Starting containers..."
+            sudo docker-compose up -d
+
+            echo "Waiting for services to start..."
+            sleep 20
+
+            echo "Checking running containers..."
+            sudo docker ps
+
+            echo "Running API health checks..."
+            curl -f http://localhost:8800/ || (echo "Backend failed!" && exit 1)
+            curl -f http://localhost:8800/books || (echo "Books API failed!" && exit 1)
+            curl -f http://localhost:3000/ || (echo "Frontend failed!" && exit 1)
+
+            echo "Deployment to QA completed successfully!"
+
+
+  cleanup:
+    needs: [ create-ec2, push-to-ecr ]
     runs-on: ubuntu-latest
 
     steps:
@@ -203,6 +248,17 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: us-east-1
 
+      - name: Debug Instance ID before termination
+        run: |
+          echo "Instance ID: ${{ needs.create-ec2.outputs.instance_id }}"
+
       - name: Terminate temporary EC2 instance
         run: |
-          aws ec2 terminate-instances --region us-east-1 --instance-ids ${{ needs.create-ec2.outputs.instance_id }}
+          INSTANCE_ID="${{ needs.create-ec2.outputs.instance_id }}"
+
+          if [ -z "$INSTANCE_ID" ]; then
+            echo "Error: No instance ID found. Skipping termination."
+            exit 1
+          fi
+
+          aws ec2 terminate-instances --region us-east-1 --instance-ids $INSTANCE_ID
