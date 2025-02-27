@@ -69,7 +69,7 @@ jobs:
           repository: ShuqingZou/midterm-source
           token: ${{ secrets.SOURCE_REPO_PAT }}
 
-      - name: Set up Docker Build
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Install Docker Compose
@@ -79,11 +79,22 @@ jobs:
 
       - name: Build and tag backend Docker image
         run: |
-          sudo docker build -t backend-nightly:latest ./backend
+          docker build -t backend-nightly:latest ./backend
+          docker save -o backend-nightly.tar backend-nightly:latest
 
       - name: Build and tag frontend Docker image
         run: |
-          sudo docker build -t frontend-nightly:latest ./frontend
+          docker build -t frontend-nightly:latest ./frontend
+          docker save -o frontend-nightly.tar frontend-nightly:latest
+
+      - name: Upload Docker images as artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: docker-images
+          path: |
+            backend-nightly.tar
+            frontend-nightly.tar
+
 
   smoke-test:
     needs: [create-ec2, build-and-test]
@@ -153,6 +164,16 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: us-east-1
 
+      - name: Download Docker images
+        uses: actions/download-artifact@v3
+        with:
+          name: docker-images
+
+      - name: Load Docker images
+        run: |
+          docker load -i backend-nightly.tar
+          docker load -i frontend-nightly.tar
+
       - name: Login to Amazon ECR
         id: login-ecr
         run: |
@@ -167,6 +188,7 @@ jobs:
         run: |
           docker tag frontend-nightly:latest 910051580567.dkr.ecr.us-east-1.amazonaws.com/bookapp/frontend:latest
           docker push 910051580567.dkr.ecr.us-east-1.amazonaws.com/bookapp/frontend:latest
+  
 
   cleanup:
     needs: push-to-ecr
