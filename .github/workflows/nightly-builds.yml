@@ -153,7 +153,7 @@ jobs:
             curl -f http://localhost:3000/ || exit 1
 
   push-to-ecr:
-    needs: build-and-test
+    needs: smoke-test
     runs-on: ubuntu-latest
 
     steps:
@@ -256,8 +256,9 @@ jobs:
 
 
   cleanup:
-    needs: [ create-ec2, push-to-ecr ]
+    needs: [ create-ec2, smoke-test, push-to-ecr ]
     runs-on: ubuntu-latest
+    if: always()
 
     steps:
       - name: Configure AWS Credentials
