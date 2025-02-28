@@ -182,32 +182,32 @@ jobs:
 
       - name: Move `latest` to `previous`
         run: |
+          set -e
+
           BACKEND_REPO="bookapp/backend"
           FRONTEND_REPO="bookapp/frontend"
 
-          LATEST_BACKEND_DIGEST=$(aws ecr describe-images --repository-name $BACKEND_REPO --query "imageDetails[?contains(imageTags, 'latest')].imageDigest" --output text || echo "")
+          # 获取最新的 `latest` 镜像摘要
+          LATEST_BACKEND_DIGEST=$(aws ecr describe-images --repository-name "$BACKEND_REPO" --query "imageDetails[?contains(imageTags, 'latest')].imageDigest" --output text || echo "")
+          LATEST_FRONTEND_DIGEST=$(aws ecr describe-images --repository-name "$FRONTEND_REPO" --query "imageDetails[?contains(imageTags, 'latest')].imageDigest" --output text || echo "")
 
-          if [ ! -z "$LATEST_BACKEND_DIGEST" ]; then
-            echo "Tagging previous backend image..."
-            aws ecr batch-delete-image --repository-name $BACKEND_REPO --image-ids imageTag=previous || true
-            aws ecr put-image --repository-name $BACKEND_REPO --image-tag previous --image-manifest "$(aws ecr batch-get-image --repository-name $BACKEND_REPO --image-ids imageDigest=$LATEST_BACKEND_DIGEST --query 'images[0].imageManifest' --output text)"
+          # 把 latest 重新标记为 previous
+          if [[ -n "$LATEST_BACKEND_DIGEST" ]]; then
+            echo "let latest be previous..."
+            IMAGE_MANIFEST=$(aws ecr batch-get-image --repository-name "$BACKEND_REPO" --image-ids imageDigest="$LATEST_BACKEND_DIGEST" --query 'images[0].imageManifest' --output text)
+            aws ecr put-image --repository-name "$BACKEND_REPO" --image-tag previous --image-manifest "$IMAGE_MANIFEST"
+          else
+            echo "no latest, skip"
           fi
 
-          LATEST_FRONTEND_DIGEST=$(aws ecr describe-images --repository-name $FRONTEND_REPO --query "imageDetails[?contains(imageTags, 'latest')].imageDigest" --output text || echo "")
-
-          if [ ! -z "$LATEST_FRONTEND_DIGEST" ]; then
-            echo "Tagging previous frontend image..."
-            aws ecr batch-delete-image --repository-name $FRONTEND_REPO --image-ids imageTag=previous || true
-            aws ecr put-image --repository-name $FRONTEND_REPO --image-tag previous --image-manifest "$(aws ecr batch-get-image --repository-name $FRONTEND_REPO --image-ids imageDigest=$LATEST_FRONTEND_DIGEST --query 'images[0].imageManifest' --output text)"
+          if [[ -n "$LATEST_FRONTEND_DIGEST" ]]; then
+            echo "let latest be previous..."
+            IMAGE_MANIFEST=$(aws ecr batch-get-image --repository-name "$FRONTEND_REPO" --image-ids imageDigest="$LATEST_FRONTEND_DIGEST" --query 'images[0].imageManifest' --output text)
+            aws ecr put-image --repository-name "$FRONTEND_REPO" --image-tag previous --image-manifest "$IMAGE_MANIFEST"
+          else
+            echo "no latest, skip"
           fi
 
-      - name: Push new `latest` Image
-        run: |
-          docker tag backend-nightly:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/$BACKEND_REPO:latest
-          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/$BACKEND_REPO:latest
-
-          docker tag frontend-nightly:latest ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/$FRONTEND_REPO:latest
-          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/$FRONTEND_REPO:latest
 
 
   deploy-qa:
