@@ -187,26 +187,39 @@ jobs:
           BACKEND_REPO="bookapp/backend"
           FRONTEND_REPO="bookapp/frontend"
 
-          # 获取最新的 `latest` 镜像摘要
           LATEST_BACKEND_DIGEST=$(aws ecr describe-images --repository-name "$BACKEND_REPO" --query "imageDetails[?contains(imageTags, 'latest')].imageDigest" --output text || echo "")
           LATEST_FRONTEND_DIGEST=$(aws ecr describe-images --repository-name "$FRONTEND_REPO" --query "imageDetails[?contains(imageTags, 'latest')].imageDigest" --output text || echo "")
 
-          # 把 latest 重新标记为 previous
+          # backend
           if [[ -n "$LATEST_BACKEND_DIGEST" ]]; then
-            echo "let latest be previous..."
+            echo "delete previous if exits"
+            aws ecr batch-delete-image --repository-name "$BACKEND_REPO" --image-ids imageTag=previous || true
+
+            echo "let latest be previous"
             IMAGE_MANIFEST=$(aws ecr batch-get-image --repository-name "$BACKEND_REPO" --image-ids imageDigest="$LATEST_BACKEND_DIGEST" --query 'images[0].imageManifest' --output text)
             aws ecr put-image --repository-name "$BACKEND_REPO" --image-tag previous --image-manifest "$IMAGE_MANIFEST"
+
+            echo "delete latest tag"
+            aws ecr batch-delete-image --repository-name "$BACKEND_REPO" --image-ids imageTag=latest || true
           else
             echo "no latest, skip"
           fi
 
+          # frontend
           if [[ -n "$LATEST_FRONTEND_DIGEST" ]]; then
-            echo "let latest be previous..."
+            echo "delete previous if exits"
+            aws ecr batch-delete-image --repository-name "$FRONTEND_REPO" --image-ids imageTag=previous || true
+
+            echo "let latest be previous"
             IMAGE_MANIFEST=$(aws ecr batch-get-image --repository-name "$FRONTEND_REPO" --image-ids imageDigest="$LATEST_FRONTEND_DIGEST" --query 'images[0].imageManifest' --output text)
             aws ecr put-image --repository-name "$FRONTEND_REPO" --image-tag previous --image-manifest "$IMAGE_MANIFEST"
+
+            echo "delete latest tag"
+            aws ecr batch-delete-image --repository-name "$FRONTEND_REPO" --image-ids imageTag=latest || true
           else
             echo "no latest, skip"
           fi
+
 
 
 
