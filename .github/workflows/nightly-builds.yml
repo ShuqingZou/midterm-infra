@@ -220,7 +220,24 @@ jobs:
             echo "no latest, skip"
           fi
 
+      - name: Push new `latest` Image
+        run: |
+          set -e
 
+          BACKEND_REPO="bookapp/backend"
+          FRONTEND_REPO="bookapp/frontend"
+          AWS_ACCOUNT_ID="${{ secrets.AWS_ACCOUNT_ID }}"
+          AWS_REGION="${{ secrets.AWS_REGION }}"
+
+          echo "push new latest"
+
+          # backend
+          docker tag backend-nightly:latest "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$BACKEND_REPO:latest"
+          docker push "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$BACKEND_REPO:latest"
+
+          # frontend
+          docker tag frontend-nightly:latest "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$FRONTEND_REPO:latest"
+          docker push "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$FRONTEND_REPO:latest"
 
 
   deploy-qa:
