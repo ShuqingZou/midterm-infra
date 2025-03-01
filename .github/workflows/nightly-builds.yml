@@ -28,21 +28,22 @@ jobs:
           docker compose up -d
           sleep 20
           
-          
+
       - name: Push to Amazon ECR
         run: |
           TIMESTAMP=$(date +'%Y%m%d-%H%M%S')
           echo "Using TIMESTAMP: $TIMESTAMP"
+
           echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
 
           echo "Listing all available images..."
-          docker images  
-          
-          BACKEND_IMAGE_ID=$(docker images --filter=reference="backend-nightly" --format "{{.ID}}")
-          FRONTEND_IMAGE_ID=$(docker images --filter=reference="frontend-nightly" --format "{{.ID}}")
+          docker images
+
+          BACKEND_IMAGE_ID=$(docker images --filter=reference="midterm-infra-backend" --format "{{.ID}}")
+          FRONTEND_IMAGE_ID=$(docker images --filter=reference="midterm-infra-frontend" --format "{{.ID}}")
 
           if [[ -z "$BACKEND_IMAGE_ID" || -z "$FRONTEND_IMAGE_ID" ]]; then
-            echo "Error: Could not find backend-nightly or frontend-nightly images!"
+            echo "Error: Could not find midterm-infra-backend or midterm-infra-frontend images!"
             exit 1
           fi
 
@@ -56,7 +57,6 @@ jobs:
 
           docker tag $FRONTEND_IMAGE_ID ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:$TIMESTAMP
           docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:$TIMESTAMP
-
 
       - name: Launch temporary EC2 instance
         run: |
