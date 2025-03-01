@@ -99,14 +99,21 @@ jobs:
           script: |
             echo "Connected to EC2 at $INSTANCE_IP"
 
-            sudo apt update
-            sudo apt install -y awscli docker.io docker-compose git
-
-            sudo systemctl start docker
+            echo "Installing AWS CLI..."
+            curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+            unzip awscliv2.zip
+            sudo ./aws/install
             aws --version
 
-            export REACT_APP_API_URL=http://localhost:8800
+            echo "Installing Docker..."
+            sudo apt-get update
+            sudo apt-get install -y docker.io
+            sudo systemctl enable docker
+            sudo systemctl start docker
+            sudo usermod -aG docker ubuntu
+            docker --version
 
+            export REACT_APP_API_URL=http://localhost:8800
             DB_HOST="${{ secrets.DB_HOST }}"
             export DB_USER="root"
             export DB_PASSWORD="${{ secrets.DB_PASSWORD }}"
@@ -117,19 +124,19 @@ jobs:
 
             aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
 
-            echo "TIMESTAMP value: $TIMESTAMP"
             if [ -z "$TIMESTAMP" ]; then
-              echo "Error: TIMESTAMP is empty"
-              exit 1
+              TIMESTAMP=$(date "+%Y%m%d.%H%M%S")
+              echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
             fi
+            echo "TIMESTAMP value: $TIMESTAMP"
 
             echo "Pulling Docker images..."
             sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:$TIMESTAMP
             sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:$TIMESTAMP
 
             echo "Starting containers..."
-            cd /home/ubuntu/app  # Change this to the correct directory
-            ls -l  # Debug check
+            cd /home/ubuntu/app
+            ls -l
             sudo docker-compose up -d
 
             sleep 20
@@ -144,6 +151,7 @@ jobs:
             curl -f http://localhost:8800/ || exit 1
             curl -f http://localhost:8800/books || exit 1
             curl -f http://localhost:3000/ || exit 1
+
 
 
       - name: Delete Images from ECR if Smoke Test Fails
