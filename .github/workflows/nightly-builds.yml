@@ -6,10 +6,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-and-push:
+  deploy:
     runs-on: ubuntu-latest
-    outputs:
-      timestamp: ${{ steps.generate_tag.outputs.timestamp }}  # 传递给后续 Job
     steps:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v2
@@ -19,6 +17,13 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
+      # --- 生成 TIMESTAMP ---
+      - name: Generate Timestamp Tag
+        run: |
+          TIMESTAMP=$(date +'%Y%m%d-%H%M%S')
+          echo "TIMESTAMP=$TIMESTAMP" >> "$GITHUB_ENV"
+
+      # --- 拉取代码 ---
       - name: Checkout Source Repo
         uses: actions/checkout@v4
         with:
@@ -28,45 +33,26 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Generate Timestamp Tag
-        id: generate_tag
-        run: |
-          TIMESTAMP=$(date +'%Y%m%d-%H%M%S')
-          echo "::set-output name=timestamp::$TIMESTAMP" 
-          echo "TIMESTAMP=$TIMESTAMP" >> "$GITHUB_ENV"
-
+      # --- 构建 Docker 镜像 ---
       - name: Build Docker Images
         run: |
-          docker build -t backend-nightly:${{ env.TIMESTAMP }} ./backend
-          docker build -t frontend-nightly:${{ env.TIMESTAMP }} ./frontend
+          docker build -t backend-nightly:$TIMESTAMP ./backend
+          docker build -t frontend-nightly:$TIMESTAMP ./frontend
 
+      # --- 推送到 ECR ---
       - name: Login to Amazon ECR
         run: |
           aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
 
       - name: Push to Amazon ECR
         run: |
-          docker tag backend-nightly:${{ env.TIMESTAMP }} ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:${{ env.TIMESTAMP }}
-          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:${{ env.TIMESTAMP }}
+          docker tag backend-nightly:$TIMESTAMP ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:$TIMESTAMP
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:$TIMESTAMP
           
-          docker tag frontend-nightly:${{ env.TIMESTAMP }} ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:${{ env.TIMESTAMP }}
-          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:${{ env.TIMESTAMP }}
+          docker tag frontend-nightly:$TIMESTAMP ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:$TIMESTAMP
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:$TIMESTAMP
 
-  create-ec2:
-    runs-on: ubuntu-latest
-    outputs:
-      instance_id: ${{ steps.create_ec2.outputs.instance_id }}
-      instance_ip: ${{ steps.create_ec2.outputs.instance_ip }}
-    needs: build-and-push
-    steps:
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
+      # --- 创建临时 EC2 ---
       - name: Launch temporary EC2 instance
         run: |
           INSTANCE_ID=$(aws ec2 run-instances \
@@ -89,25 +75,14 @@ jobs:
             --query 'Reservations[0].Instances[0].PublicDnsName' \
             --output text)
 
-          echo "EC2 Instance ID: $INSTANCE_ID"
-          echo "EC2 Instance IP: $INSTANCE_IP"
+          echo "INSTANCE_ID=$INSTANCE_ID" >> "$GITHUB_ENV"
+          echo "INSTANCE_IP=$INSTANCE_IP" >> "$GITHUB_ENV"
 
-          echo "instance_id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
-          echo "instance_ip=$INSTANCE_IP" >> "$GITHUB_OUTPUT"
-
-  smoke-test:
-    needs: [create-ec2, build-and-push]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Debug Instance IP
-        run: |
-          echo "Received Instance ID: ${{ needs.create-ec2.outputs.instance_id }}"
-          echo "Received Instance IP: ${{ needs.create-ec2.outputs.instance_ip }}"
-
+      # --- 进行 Smoke Test ---
       - name: SSH into EC2 and run Smoke Test
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ needs.create-ec2.outputs.instance_ip }}
+          host: ${{ env.INSTANCE_IP }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           script: |
@@ -116,8 +91,8 @@ jobs:
 
             aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
             
-            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:${{ needs.build-and-push.outputs.timestamp }}
-            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:${{ needs.build-and-push.outputs.timestamp }}
+            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:$TIMESTAMP
+            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:$TIMESTAMP
             
             sudo docker-compose up -d
 
@@ -127,82 +102,34 @@ jobs:
             curl -f http://localhost:8800/books || exit 1
             curl -f http://localhost:3000/ || exit 1
 
-
-  cleanup-ecr:
-    needs: smoke-test
-    if: failure()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
+      # --- 清理 ECR（如果 Smoke Test 失败）---
       - name: Delete failed images from ECR
+        if: failure()
         run: |
-          aws ecr batch-delete-image --repository-name bookapp/backend --image-ids imageTag=${{ needs.build-and-push.outputs.timestamp }} || true
-          aws ecr batch-delete-image --repository-name bookapp/frontend --image-ids imageTag=${{ needs.build-and-push.outputs.timestamp }} || true
+          aws ecr batch-delete-image --repository-name bookapp/backend --image-ids imageTag=$TIMESTAMP || true
+          aws ecr batch-delete-image --repository-name bookapp/frontend --image-ids imageTag=$TIMESTAMP || true
 
-  deploy-qa:
-    needs: smoke-test
-    if: success()
-    runs-on: ubuntu-latest
-    steps:
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
-      - name: SSH into QA EC2 and Deploy
+      # --- 部署到 QA（如果 Smoke Test 通过）---
+      - name: Deploy to QA
+        if: success()
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.QA_EC2_IP }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           script: |
-            echo "Deploying version: ${{ needs.build-and-push.outputs.timestamp }}"
+            echo "Deploying version: $TIMESTAMP"
 
             aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
             
             sudo docker-compose down || true
             
-            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:${{ needs.build-and-push.outputs.timestamp }}
-            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:${{ needs.build-and-push.outputs.timestamp }}
+            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:$TIMESTAMP
+            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:$TIMESTAMP
 
             sudo docker-compose up -d
 
-
-  cleanup:
-    needs: [ create-ec2, smoke-test]
-    runs-on: ubuntu-latest
-    if: always()
-
-    steps:
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
-      - name: Debug Instance ID before termination
-        run: |
-          echo "Instance ID: ${{ needs.create-ec2.outputs.instance_id }}"
-
+      # --- 终止临时 EC2 ---
       - name: Terminate temporary EC2 instance
         run: |
-          INSTANCE_ID="${{ needs.create-ec2.outputs.instance_id }}"
-          
-          if [ -z "$INSTANCE_ID" ]; then
-            echo "Error: No instance ID found. Skipping termination."
-            exit 1
-          fi
-          
           aws ec2 terminate-instances --region ${{ secrets.AWS_REGION }} --instance-ids $INSTANCE_ID
