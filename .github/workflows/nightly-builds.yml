@@ -126,23 +126,45 @@ jobs:
           username: ubuntu
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           script: |
-            echo "Updating system and installing Docker..."
+            echo "🔍 Checking disk space before cleanup..."
+            df -h
+
+            echo "🧹 Removing unused Docker images..."
+            sudo docker system prune -af || true
+
+            echo "🧹 Removing old logs..."
+            sudo journalctl --vacuum-time=1d || true
+
+            echo "🔍 Checking disk space after cleanup..."
+            df -h
+
+            echo "📦 Updating system and installing Docker..."
             sudo apt-get update
             sudo apt-get install -y docker.io docker-compose
 
-            echo "Ensuring Docker service is running..."
+            echo "🚀 Ensuring Docker service is running..."
             sudo systemctl start docker
             sudo systemctl enable docker
 
-            echo "Adding user to Docker group..."
+            echo "👤 Adding user to Docker group..."
             sudo usermod -aG docker ubuntu
 
-            echo "Checking Docker version..."
+            echo "✅ Checking Docker version..."
             sudo docker --version
             sudo docker-compose --version
 
-            echo "Creating .env file..."
-            cat <<EOF > /home/ubuntu/.env
+            echo "📁 Ensuring deploy directory exists..."
+            mkdir -p /home/ubuntu/deploy
+            cd /home/ubuntu/deploy
+
+            echo "📌 Checking if docker-compose.yml exists..."
+            if [ ! -f "docker-compose.yml" ]; then
+              echo "❌ Error: docker-compose.yml not found!"
+              exit 1
+            fi
+
+            echo "📝 Creating .env file..."
+            cat <<EOF > /home/ubuntu/deploy/.env
             REACT_APP_API_URL=http://localhost:8800
             DB_HOST=${{ secrets.DB_HOST }}
             DB_USER=root
@@ -151,23 +173,24 @@ jobs:
             DB_PORT=3306
             EOF
 
-            echo "Loading Docker images..."
-            sudo docker load -i /home/ubuntu/docker-images/backend-nightly.tar
-            sudo docker load -i /home/ubuntu/docker-images/frontend-nightly.tar
+            echo "📦 Loading Docker images..."
+            sudo docker load -i /home/ubuntu/docker-images/backend-nightly.tar || { echo "❌ Failed to load backend image!"; exit 1; }
+            sudo docker load -i /home/ubuntu/docker-images/frontend-nightly.tar || { echo "❌ Failed to load frontend image!"; exit 1; }
 
-            echo "Starting Docker containers..."
-            sudo docker-compose --env-file /home/ubuntu/.env up -d
+            echo "🚀 Starting Docker containers..."
+            sudo docker-compose --env-file /home/ubuntu/deploy/.env up -d || { echo "❌ Docker-compose up failed!"; exit 1; }
             sleep 20 
 
-            echo "Checking running containers..."
+            echo "🔍 Checking running containers..."
             sudo docker ps -a
 
-            echo "Running Smoke Tests..."
+            echo "✅ Running Smoke Tests..."
             curl -f http://localhost:8800/ || exit 1
             curl -f http://localhost:8800/books || exit 1
             curl -f http://localhost:3000/ || exit 1
 
-            echo "Smoke test passed!"
+            echo "🎉 Smoke test passed!"
+
 
 
   push-to-ecr:
