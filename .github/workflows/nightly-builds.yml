@@ -98,11 +98,15 @@ jobs:
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           script: |
             echo "Connected to EC2 at $INSTANCE_IP"
-            sudo apt update && sudo apt install -y docker.io docker-compose git
+
+            sudo apt update
+            sudo apt install -y awscli docker.io docker-compose git
+
             sudo systemctl start docker
+            aws --version
 
             export REACT_APP_API_URL=http://localhost:8800
-            
+
             DB_HOST="${{ secrets.DB_HOST }}"
             export DB_USER="root"
             export DB_PASSWORD="${{ secrets.DB_PASSWORD }}"
@@ -113,15 +117,34 @@ jobs:
 
             aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
 
+            echo "TIMESTAMP value: $TIMESTAMP"
+            if [ -z "$TIMESTAMP" ]; then
+              echo "Error: TIMESTAMP is empty"
+              exit 1
+            fi
+
+            echo "Pulling Docker images..."
             sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:$TIMESTAMP
             sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:$TIMESTAMP
+
+            echo "Starting containers..."
+            cd /home/ubuntu/app  # Change this to the correct directory
+            ls -l  # Debug check
             sudo docker-compose up -d
+
             sleep 20
+
+            echo "Checking running containers..."
+            sudo docker ps -a
+
+            echo "Checking backend logs..."
+            sudo docker logs $(sudo docker ps -q --filter "name=backend")
 
             echo "Running Smoke Tests..."
             curl -f http://localhost:8800/ || exit 1
             curl -f http://localhost:8800/books || exit 1
             curl -f http://localhost:3000/ || exit 1
+
 
       - name: Delete Images from ECR if Smoke Test Fails
         if: failure()
