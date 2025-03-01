@@ -32,8 +32,8 @@ jobs:
         id: generate_tag
         run: |
           TIMESTAMP=$(date +'%Y%m%d-%H%M%S')
-          echo "::set-output name=timestamp::$TIMESTAMP"  # 传递给后续 Job
-          echo "TIMESTAMP=$TIMESTAMP" >> "$GITHUB_ENV"   # 仅本 Job 内部使用
+          echo "::set-output name=timestamp::$TIMESTAMP" 
+          echo "TIMESTAMP=$TIMESTAMP" >> "$GITHUB_ENV"
 
       - name: Build Docker Images
         run: |
@@ -89,11 +89,11 @@ jobs:
             --query 'Reservations[0].Instances[0].PublicDnsName' \
             --output text)
 
-          echo "::set-output name=instance_id::$INSTANCE_ID"
-          echo "::set-output name=instance_ip::$INSTANCE_IP"
-          
           echo "EC2 Instance ID: $INSTANCE_ID"
           echo "EC2 Instance IP: $INSTANCE_IP"
+
+          echo "instance_id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
+          echo "instance_ip=$INSTANCE_IP" >> "$GITHUB_OUTPUT"
 
   smoke-test:
     needs: [create-ec2, build-and-push]
@@ -101,6 +101,7 @@ jobs:
     steps:
       - name: Debug Instance IP
         run: |
+          echo "Received Instance ID: ${{ needs.create-ec2.outputs.instance_id }}"
           echo "Received Instance IP: ${{ needs.create-ec2.outputs.instance_ip }}"
 
       - name: SSH into EC2 and run Smoke Test
@@ -125,6 +126,7 @@ jobs:
             curl -f http://localhost:8800/ || exit 1
             curl -f http://localhost:8800/books || exit 1
             curl -f http://localhost:3000/ || exit 1
+
 
   cleanup-ecr:
     needs: smoke-test
