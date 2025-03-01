@@ -17,42 +17,40 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # --- 生成 TIMESTAMP ---
-      - name: Generate Timestamp Tag
-        run: |
-          TIMESTAMP=$(date +'%Y%m%d-%H%M%S')
-          echo "TIMESTAMP=$TIMESTAMP" >> "$GITHUB_ENV"
-
-      # --- 拉取代码 ---
       - name: Checkout Source Repo
         uses: actions/checkout@v4
         with:
           repository: ShuqingZou/midterm-source
           token: ${{ secrets.SOURCE_REPO_PAT }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # --- 构建 Docker 镜像 ---
-      - name: Build Docker Images
+      - name: Build Images Using Docker Compose
         run: |
-          docker build -t backend-nightly:$TIMESTAMP ./backend
-          docker build -t frontend-nightly:$TIMESTAMP ./frontend
+          docker compose up -d
+          sleep 20
 
-      # --- 推送到 ECR ---
       - name: Login to Amazon ECR
         run: |
           aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
 
       - name: Push to Amazon ECR
         run: |
-          docker tag backend-nightly:$TIMESTAMP ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:$TIMESTAMP
-          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:$TIMESTAMP
-          
-          docker tag frontend-nightly:$TIMESTAMP ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:$TIMESTAMP
-          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:$TIMESTAMP
+          TIMESTAMP=$(date +'%Y%m%d-%H%M%S')
+          echo "Using TIMESTAMP: $TIMESTAMP"
+          echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
 
-      # --- 创建临时 EC2 ---
+          BACKEND_IMAGE_ID=$(docker images --filter=reference="midterm-source_backend" --format "{{.ID}}")
+          FRONTEND_IMAGE_ID=$(docker images --filter=reference="midterm-source_frontend" --format "{{.ID}}")
+
+          echo "Backend Image ID: $BACKEND_IMAGE_ID"
+          echo "Frontend Image ID: $FRONTEND_IMAGE_ID"
+
+          docker tag $BACKEND_IMAGE_ID ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:$TIMESTAMP
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:$TIMESTAMP
+
+          docker tag $FRONTEND_IMAGE_ID ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:$TIMESTAMP
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:$TIMESTAMP
+    
+
       - name: Launch temporary EC2 instance
         run: |
           INSTANCE_ID=$(aws ec2 run-instances \
@@ -78,7 +76,7 @@ jobs:
           echo "INSTANCE_ID=$INSTANCE_ID" >> "$GITHUB_ENV"
           echo "INSTANCE_IP=$INSTANCE_IP" >> "$GITHUB_ENV"
 
-      # --- 进行 Smoke Test ---
+
       - name: SSH into EC2 and run Smoke Test
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -86,30 +84,71 @@ jobs:
           username: ubuntu
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           script: |
-            sudo apt update && sudo apt install -y docker.io docker-compose awscli
+            set -e 
+
+            echo "Updating package lists..."
+            sudo apt update -y
+            
+            echo "Installing dependencies: AWS CLI, Docker, Docker Compose..."
+            sudo apt install -y awscli docker.io
+            
+            echo "Starting Docker service..."
+            sudo systemctl enable docker
             sudo systemctl start docker
 
+            sudo usermod -aG docker ubuntu
+            newgrp docker
+
+            echo "Installing Docker Compose..."
+            sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+            sudo chmod +x /usr/local/bin/docker-compose
+
+            echo "Checking installed versions..."
+            docker --version
+            docker-compose --version
+            aws --version
+
+            echo "Logging into Amazon ECR..."
             aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
-            
+
+            echo "Pulling images from ECR..."
             sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:$TIMESTAMP
             sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:$TIMESTAMP
             
+            echo "Starting services with Docker Compose..."
             sudo docker-compose up -d
 
+            echo "Waiting for services to start..."
             sleep 30
 
+            echo "Running smoke tests..."
             curl -f http://localhost:8800/ || exit 1
             curl -f http://localhost:8800/books || exit 1
             curl -f http://localhost:3000/ || exit 1
 
-      # --- 清理 ECR（如果 Smoke Test 失败）---
+
       - name: Delete failed images from ECR
         if: failure()
         run: |
-          aws ecr batch-delete-image --repository-name bookapp/backend --image-ids imageTag=$TIMESTAMP || true
-          aws ecr batch-delete-image --repository-name bookapp/frontend --image-ids imageTag=$TIMESTAMP || true
+          echo "Checking if failed images exist before deletion..."
 
-      # --- 部署到 QA（如果 Smoke Test 通过）---
+          EXISTS_BACKEND=$(aws ecr describe-images --repository-name bookapp/backend --query "imageDetails[?imageTags[?@=='$TIMESTAMP']]" --output text || echo "")
+          EXISTS_FRONTEND=$(aws ecr describe-images --repository-name bookapp/frontend --query "imageDetails[?imageTags[?@=='$TIMESTAMP']]" --output text || echo "")
+
+          if [[ -n "$EXISTS_BACKEND" ]]; then
+            echo "Deleting backend image with tag $TIMESTAMP..."
+            aws ecr batch-delete-image --repository-name bookapp/backend --image-ids imageTag=$TIMESTAMP
+          else
+            echo "No backend image found with tag $TIMESTAMP. Skipping deletion."
+          fi
+
+          if [[ -n "$EXISTS_FRONTEND" ]]; then
+            echo "Deleting frontend image with tag $TIMESTAMP..."
+            aws ecr batch-delete-image --repository-name bookapp/frontend --image-ids imageTag=$TIMESTAMP
+          else
+            echo "No frontend image found with tag $TIMESTAMP. Skipping deletion."
+          fi
+
       - name: Deploy to QA
         if: success()
         uses: appleboy/ssh-action@v1.0.3
@@ -118,18 +157,45 @@ jobs:
           username: ubuntu
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           script: |
+            set -e 
+            
             echo "Deploying version: $TIMESTAMP"
 
+            echo "Installing dependencies if missing..."
+            sudo apt update -y
+            sudo apt install -y docker.io docker-compose awscli || true
+            sudo systemctl start docker || true
+
+            echo "Logging into Amazon ECR..."
             aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
-            
+
+            echo "Navigating to deployment directory..."
+            cd /home/ubuntu/deploy || exit 1
+
+            echo "Stopping existing containers..."
             sudo docker-compose down || true
-            
+
+            echo "Pulling latest images..."
             sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:$TIMESTAMP
             sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:$TIMESTAMP
 
+            echo "Starting new deployment..."
             sudo docker-compose up -d
 
-      # --- 终止临时 EC2 ---
+            echo "Waiting for services to stabilize..."
+            sleep 30
+
+            echo "Checking running containers..."
+            sudo docker ps
+
+            echo "Running API health checks..."
+            curl -f http://localhost:8800/ || (echo "Backend failed!" && exit 1)
+            curl -f http://localhost:8800/books || (echo "Books API failed!" && exit 1)
+            curl -f http://localhost:3000/ || (echo "Frontend failed!" && exit 1)
+
+            echo "Deployment to QA completed successfully!"
+
       - name: Terminate temporary EC2 instance
+        if: always()
         run: |
           aws ec2 terminate-instances --region ${{ secrets.AWS_REGION }} --instance-ids $INSTANCE_ID
