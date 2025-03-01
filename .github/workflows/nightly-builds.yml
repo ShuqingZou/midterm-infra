@@ -67,41 +67,30 @@ jobs:
             --query 'Instances[0].InstanceId' \
             --output text)
 
-          echo "Waiting for EC2 instance ($INSTANCE_ID) to get Public DNS..."
+          echo "Launched EC2 Instance: $INSTANCE_ID"
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
 
-          while true; do
-            INSTANCE_IP=$(aws ec2 describe-instances \
-              --region ${{ secrets.AWS_REGION }} \
-              --instance-ids $INSTANCE_ID \
-              --query 'Reservations[0].Instances[0].PublicDnsName' \
-              --output text)
+          aws ec2 wait instance-running --instance-ids $INSTANCE_ID
 
-            if [[ "$INSTANCE_IP" != "None" && "$INSTANCE_IP" != "" ]]; then
-              break
-            fi
+          INSTANCE_IP=$(aws ec2 describe-instances \
+            --region ${{ secrets.AWS_REGION }} \
+            --instance-ids $INSTANCE_ID \
+            --query 'Reservations[0].Instances[0].PublicDnsName' \
+            --output text)
 
-            echo "Waiting for Public DNS..."
-            sleep 5
-          done
-
-          echo "Instance ID: $INSTANCE_ID"
-          echo "Instance IP: $INSTANCE_IP"
-
-          echo "::set-output name=instance_id::$INSTANCE_ID"
-          echo "::set-output name=instance_ip::$INSTANCE_IP"
+          echo "INSTANCE_IP=$INSTANCE_IP" >> $GITHUB_ENV
 
       - name: Debug EC2 Instance Details
         run: |
-         echo "Instance ID: ${{ needs.create-ec2.outputs.instance_id }}"
-         echo "Instance IP: ${{ needs.create-ec2.outputs.instance_ip }}"
-          
-         aws ec2 describe-instances --instance-ids i-04b2a9f90707e3528 --region ${{ secrets.AWS_REGION }} --query 'Reservations[0].Instances[0].StateReason' --output json
+          echo "Instance ID: $INSTANCE_ID"
+          echo "Instance IP: $INSTANCE_IP"
+          aws ec2 describe-instances --instance-ids $INSTANCE_ID --region ${{ secrets.AWS_REGION }} --query 'Reservations[0].Instances[0].StateReason' --output json
 
       - name: Run Smoke Test on EC2
         id: smoke_test
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ needs.create-ec2.outputs.instance_ip }}
+          host: ${{ env.INSTANCE_IP }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           script: |
@@ -131,43 +120,13 @@ jobs:
             curl -f http://localhost:3000/ || exit 1
 
       - name: Delete Images from ECR if Smoke Test Fails
-        if: failure() && steps.smoke_test.outcome == 'failure'
+        if: failure()
         run: |
           echo "Smoke test failed. Cleaning up images from ECR..."
           aws ecr batch-delete-image --repository-name bookapp/backend --image-ids imageTag=$TIMESTAMP
           aws ecr batch-delete-image --repository-name bookapp/frontend --image-ids imageTag=$TIMESTAMP
 
-      - name: Deploy to QA EC2
-        if: success()
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.QA_EC2_IP }}
-          username: ubuntu
-          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
-          script: |
-            aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
-      
-            echo "Stopping and removing old containers..."
-            sudo docker-compose down
-
-            echo "Cleaning up old images, containers, and volumes..."
-            sudo docker system prune -af --volumes
-
-            echo "Removing old backend images except latest..."
-            sudo docker rmi -f $(sudo docker images --format '{{.Repository}}:{{.Tag}}' | grep 'bookapp/backend' | grep -v "$TIMESTAMP") || true
-
-            echo "Removing old frontend images except latest..."
-            sudo docker rmi -f $(sudo docker images --format '{{.Repository}}:{{.Tag}}' | grep 'bookapp/frontend' | grep -v "$TIMESTAMP") || true
-
-            echo "Pulling latest backend and frontend images..."
-            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:$TIMESTAMP
-            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:$TIMESTAMP
-
-            echo "Starting new containers..."
-            sudo docker-compose up -d
-
-
       - name: Terminate Temporary EC2 Instance
         if: always()
         run: |
-          aws ec2 terminate-instances --instance-ids ${{ needs.create-ec2.outputs.instance_id }}
+          aws ec2 terminate-instances --region ${{ secrets.AWS_REGION }} --instance-ids $INSTANCE_ID
