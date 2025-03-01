@@ -123,17 +123,27 @@ jobs:
           echo "Checking docker-images/ directory structure after download:"
           ls -lah docker-images/
 
+      - name: Fix permissions before SCP
+        run: chmod 644 docker-images/*.tar
+
       - name: Transfer Docker images and docker-compose.yml to EC2
         uses: appleboy/scp-action@v0.1.4
         with:
           host: ${{ needs.create-ec2.outputs.instance_ip }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
-          source: |
-            docker-images/backend-nightly.tar
-            docker-images/frontend-nightly.tar
-            docker-compose.yml
+          source: "docker-images"
           target: "/home/ubuntu/"
+
+      - name: Check transferred files on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ needs.create-ec2.outputs.instance_ip }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          script: |
+            echo "Checking transferred files on EC2..."
+            ls -lah /home/ubuntu/docker-images/
 
       - name: SSH into EC2 and run Smoke Test
         uses: appleboy/ssh-action@v1.0.3
@@ -172,6 +182,7 @@ jobs:
             curl -f http://localhost:8800/ || exit 1
             curl -f http://localhost:8800/books || exit 1
             curl -f http://localhost:3000/ || exit 1
+
 
 
 
