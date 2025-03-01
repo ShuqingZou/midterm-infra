@@ -83,18 +83,24 @@ jobs:
       - name: Build and tag backend Docker image
         run: |
           docker build -t backend-nightly:latest ./backend
-          docker save -o docker-images/backend-nightly.tar backend-nightly:latest  # ✅ 直接存到 docker-images/
+          docker save -o docker-images/backend-nightly.tar backend-nightly:latest
 
       - name: Build and tag frontend Docker image
         run: |
           docker build -t frontend-nightly:latest ./frontend
-          docker save -o docker-images/frontend-nightly.tar frontend-nightly:latest  # ✅ 直接存到 docker-images/
+          docker save -o docker-images/frontend-nightly.tar frontend-nightly:latest
+
+      - name: Check file structure before upload
+        run: |
+          echo "Checking docker-images/ directory structure before upload:"
+          ls -lah docker-images/
 
       - name: Upload Docker images as artifacts
         uses: actions/upload-artifact@v4
         with:
           name: docker-images
-          path: docker-images/
+          path: docker-images/*
+
 
   smoke-test:
     needs: [ create-ec2, build-and-test ]
@@ -113,10 +119,11 @@ jobs:
           name: docker-images
           path: docker-images
 
-      - name: Check if docker images exist
+      - name:
+          Debug: Check file structure after download
         run: |
-          ls -lah docker-images
-          ls -lah docker-images/*.tar || echo "No Docker image tar files found!"
+          echo "Checking docker-images/ directory structure after download:"
+          ls -lah docker-images/
 
       - name: Transfer Docker images and docker-compose.yml to EC2
         uses: appleboy/scp-action@v0.1.4
@@ -167,6 +174,7 @@ jobs:
             curl -f http://localhost:8800/ || exit 1
             curl -f http://localhost:8800/books || exit 1
             curl -f http://localhost:3000/ || exit 1
+
 
 
   push-to-ecr:
