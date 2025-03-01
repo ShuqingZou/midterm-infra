@@ -117,17 +117,14 @@ jobs:
         with:
           name: docker-images
 
-      - name: Parallel SCP Docker images to EC2
-        run: |
-          echo "🚀 Transferring Docker images in parallel..."
-          scp -i ${{ secrets.EC2_SSH_PRIVATE_KEY }} -o StrictHostKeyChecking=no \
-            backend-nightly.tar ubuntu@${{ needs.create-ec2.outputs.instance_ip }}:/home/ubuntu/docker-images/backend-nightly.tar &
-          
-          scp -i ${{ secrets.EC2_SSH_PRIVATE_KEY }} -o StrictHostKeyChecking=no \
-            frontend-nightly.tar ubuntu@${{ needs.create-ec2.outputs.instance_ip }}:/home/ubuntu/docker-images/frontend-nightly.tar &
-          
-          wait
-          echo "✅ Docker images transferred successfully."
+      - name: SCP Docker images to EC2
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ needs.create-ec2.outputs.instance_ip }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          source: "backend-nightly.tar,frontend-nightly.tar"
+          target: "/home/ubuntu/docker-images"
 
       - name: Download Docker Compose File
         uses: actions/download-artifact@v4
@@ -143,7 +140,7 @@ jobs:
           source: "docker-compose.yml"
           target: "/home/ubuntu/deploy/"
 
-      - name: SSH into EC2 and Deploy
+      - name: SSH into EC2 and Prepare Environment
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ needs.create-ec2.outputs.instance_ip }}
@@ -152,16 +149,28 @@ jobs:
           script: |
             echo "📁 Ensuring deploy directory exists..."
             mkdir -p /home/ubuntu/deploy
-            
-            echo "📦 Installing dependencies..."
-            sudo apt-get update
-            sudo apt-get install -y docker.io docker-compose pv
-            
-            echo "🚀 Ensuring Docker service is running..."
-            sudo systemctl start docker
-            sudo systemctl enable docker
+
+            echo "📦 Updating system and installing Docker..."
+            if [ -f /etc/debian_version ]; then
+              sudo apt-get update
+              sudo apt-get install -y docker.io
+              sudo systemctl start docker
+              sudo systemctl enable docker
+            else
+              sudo yum install -y docker
+              sudo service docker start
+              sudo chkconfig docker on
+            fi
+
+            echo "👤 Adding user to Docker group..."
             sudo usermod -aG docker ubuntu
-            
+            newgrp docker
+
+            echo "📦 Installing latest docker-compose..."
+            sudo curl -L https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m) -o /usr/local/bin/docker-compose
+            sudo chmod +x /usr/local/bin/docker-compose
+            docker-compose --version
+
             echo "📝 Creating .env file..."
             cat <<EOF > /home/ubuntu/deploy/.env
             REACT_APP_API_URL=http://localhost:8800
@@ -171,25 +180,27 @@ jobs:
             DB_NAME=test
             DB_PORT=3306
             EOF
-            
-            echo "📦 Loading Docker images with progress bar..."
-            pv /home/ubuntu/docker-images/backend-nightly.tar | sudo docker load || { echo "❌ Failed to load backend image!"; exit 1; }
-            pv /home/ubuntu/docker-images/frontend-nightly.tar | sudo docker load || { echo "❌ Failed to load frontend image!"; exit 1; }
-            
+
+            echo "📦 Loading Docker images..."
+            sudo docker load -i /home/ubuntu/docker-images/backend-nightly.tar || { echo "❌ Failed to load backend image!"; exit 1; }
+            sudo docker load -i /home/ubuntu/docker-images/frontend-nightly.tar || { echo "❌ Failed to load frontend image!"; exit 1; }
+
             echo "🚀 Starting Docker containers..."
             cd /home/ubuntu/deploy
             sudo docker-compose --env-file /home/ubuntu/deploy/.env up -d || { echo "❌ Docker-compose up failed!"; exit 1; }
             sleep 20 
-            
+
             echo "🔍 Checking running containers..."
             sudo docker ps -a
-            
+
             echo "✅ Running Smoke Tests..."
             curl -f http://localhost:8800/ || { echo "❌ Backend failed!"; exit 1; }
             curl -f http://localhost:8800/books || { echo "❌ Books API failed!"; exit 1; }
             curl -f http://localhost:3000/ || { echo "❌ Frontend failed!"; exit 1; }
-            
+
             echo "🎉 Smoke test passed!"
+
+
 
   push-to-ecr:
     needs: smoke-test
