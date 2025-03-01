@@ -97,7 +97,6 @@ jobs:
 
          aws ec2 describe-instances --instance-ids ${{ needs.create-ec2.outputs.instance_id }} --region ${{ secrets.AWS_REGION }} --query 'Reservations[0].Instances[0].[InstanceId, State.Name, PublicDnsName, PublicIpAddress]' --output table
 
-
       - name: Run Smoke Test on EC2
         id: smoke_test
         uses: appleboy/ssh-action@v1.0.3
@@ -153,5 +152,6 @@ jobs:
             sudo docker-compose up -d
 
       - name: Terminate Temporary EC2 Instance
+        if: always()
         run: |
           aws ec2 terminate-instances --instance-ids ${{ needs.create-ec2.outputs.instance_id }}
