@@ -157,6 +157,21 @@ jobs:
               exit 1
             fi
 
+            echo "📦 Updating system and installing Docker..."
+            sudo apt-get update
+            sudo apt-get install -y docker.io docker-compose
+
+            echo "🚀 Ensuring Docker service is running..."
+            sudo systemctl start docker
+            sudo systemctl enable docker
+
+            echo "👤 Adding user to Docker group..."
+            sudo usermod -aG docker ubuntu
+
+            echo "✅ Checking Docker version..."
+            sudo docker --version
+            sudo docker-compose --version
+
             echo "🧹 Checking disk space before cleanup..."
             df -h
 
@@ -173,21 +188,6 @@ jobs:
 
             echo "🧹 Checking disk space after cleanup..."
             df -h
-
-            echo "📦 Updating system and installing Docker..."
-            sudo apt-get update
-            sudo apt-get install -y docker.io docker-compose
-
-            echo "🚀 Ensuring Docker service is running..."
-            sudo systemctl start docker
-            sudo systemctl enable docker
-
-            echo "👤 Adding user to Docker group..."
-            sudo usermod -aG docker ubuntu
-
-            echo "✅ Checking Docker version..."
-            sudo docker --version
-            sudo docker-compose --version
 
             echo "📝 Creating .env file..."
             cat <<EOF > /home/ubuntu/deploy/.env
@@ -217,7 +217,6 @@ jobs:
             curl -f http://localhost:3000/ || { echo "❌ Frontend failed!"; exit 1; }
 
             echo "🎉 Smoke test passed!"
-
 
 
   push-to-ecr:
