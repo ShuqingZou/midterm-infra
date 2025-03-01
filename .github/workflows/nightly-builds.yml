@@ -77,27 +77,27 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y docker-compose
 
+      - name: Create storage directory
+        run: mkdir -p docker-images
+
       - name: Build and tag backend Docker image
         run: |
           docker build -t backend-nightly:latest ./backend
-          docker save -o backend-nightly.tar backend-nightly:latest
+          docker save -o docker-images/backend-nightly.tar backend-nightly:latest  # ✅ 直接存到 docker-images/
 
       - name: Build and tag frontend Docker image
         run: |
           docker build -t frontend-nightly:latest ./frontend
-          docker save -o frontend-nightly.tar frontend-nightly:latest
+          docker save -o docker-images/frontend-nightly.tar frontend-nightly:latest  # ✅ 直接存到 docker-images/
 
       - name: Upload Docker images as artifacts
         uses: actions/upload-artifact@v4
         with:
           name: docker-images
-          path: |
-            backend-nightly.tar
-            frontend-nightly.tar
-
+          path: docker-images/
 
   smoke-test:
-    needs: [create-ec2, build-and-test]
+    needs: [ create-ec2, build-and-test ]
     runs-on: ubuntu-latest
 
     steps:
@@ -167,7 +167,7 @@ jobs:
             curl -f http://localhost:8800/ || exit 1
             curl -f http://localhost:8800/books || exit 1
             curl -f http://localhost:3000/ || exit 1
-  
+
 
   push-to-ecr:
     needs: smoke-test
