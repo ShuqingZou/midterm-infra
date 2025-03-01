@@ -157,6 +157,23 @@ jobs:
               exit 1
             fi
 
+            echo "🧹 Checking disk space before cleanup..."
+            df -h
+
+            echo "🗑️ Removing old Docker containers and images..."
+            sudo docker system prune -af || true
+            sudo docker volume prune -f || true
+
+            echo "🗑️ Removing unused packages..."
+            sudo apt-get autoremove -y
+            sudo apt-get clean
+
+            echo "🗑️ Clearing journal logs..."
+            sudo journalctl --vacuum-time=1d || true
+
+            echo "🧹 Checking disk space after cleanup..."
+            df -h
+
             echo "📦 Updating system and installing Docker..."
             sudo apt-get update
             sudo apt-get install -y docker.io docker-compose
@@ -200,6 +217,7 @@ jobs:
             curl -f http://localhost:3000/ || { echo "❌ Frontend failed!"; exit 1; }
 
             echo "🎉 Smoke test passed!"
+
 
 
   push-to-ecr:
