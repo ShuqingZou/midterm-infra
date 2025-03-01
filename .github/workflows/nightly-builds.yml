@@ -55,8 +55,8 @@ jobs:
   create-ec2:
     runs-on: ubuntu-latest
     outputs:
-      instance_id: ${{ steps.create.outputs.instance_id }}
-      instance_ip: ${{ steps.create.outputs.instance_ip }}
+      instance_id: ${{ steps.create_ec2.outputs.instance_id }}
+      instance_ip: ${{ steps.create_ec2.outputs.instance_ip }}
     needs: build-and-push
     steps:
       - name: Configure AWS Credentials
@@ -91,11 +91,18 @@ jobs:
 
           echo "::set-output name=instance_id::$INSTANCE_ID"
           echo "::set-output name=instance_ip::$INSTANCE_IP"
+          
+          echo "EC2 Instance ID: $INSTANCE_ID"
+          echo "EC2 Instance IP: $INSTANCE_IP"
 
   smoke-test:
     needs: [create-ec2, build-and-push]
     runs-on: ubuntu-latest
     steps:
+      - name: Debug Instance IP
+        run: |
+          echo "Received Instance IP: ${{ needs.create-ec2.outputs.instance_ip }}"
+
       - name: SSH into EC2 and run Smoke Test
         uses: appleboy/ssh-action@v1.0.3
         with:
