@@ -101,7 +101,6 @@ jobs:
           name: docker-images
           path: docker-images/*
 
-
   smoke-test:
     needs: [ create-ec2, build-and-test ]
     runs-on: ubuntu-latest
@@ -119,8 +118,7 @@ jobs:
           name: docker-images
           path: docker-images
 
-      - name:
-          Debug: Check file structure after download
+      - name: Check file structure after download
         run: |
           echo "Checking docker-images/ directory structure after download:"
           ls -lah docker-images/
