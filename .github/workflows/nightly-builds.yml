@@ -59,7 +59,7 @@ jobs:
           INSTANCE_ID=$(aws ec2 run-instances \
             --region ${{ secrets.AWS_REGION }} \
             --image-id ami-04b4f1a9cf54c11d0 \
-            --instance-type t3.micro \
+            --instance-type t2.micro \
             --key-name midterm-key \
             --security-group-ids sg-03a57241aa0650326 \
             --subnet-id subnet-037010f619e30f145 \
@@ -94,8 +94,8 @@ jobs:
         run: |
          echo "Instance ID: ${{ needs.create-ec2.outputs.instance_id }}"
          echo "Instance IP: ${{ needs.create-ec2.outputs.instance_ip }}"
-
-         aws ec2 describe-instances --instance-ids ${{ needs.create-ec2.outputs.instance_id }} --region ${{ secrets.AWS_REGION }} --query 'Reservations[0].Instances[0].[InstanceId, State.Name, PublicDnsName, PublicIpAddress]' --output table
+          
+         aws ec2 describe-instances --instance-ids i-04b2a9f90707e3528 --region ${{ secrets.AWS_REGION }} --query 'Reservations[0].Instances[0].StateReason' --output json
 
       - name: Run Smoke Test on EC2
         id: smoke_test
