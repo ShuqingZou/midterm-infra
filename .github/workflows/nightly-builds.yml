@@ -85,6 +85,9 @@ jobs:
         run: |
           echo "Using INSTANCE_IP for SSH: $INSTANCE_IP"
 
+      - name: Wait for EC2 to be ready
+        run: |
+          sleep 60
 
       - name: Run Smoke Test on EC2
         id: smoke_test
