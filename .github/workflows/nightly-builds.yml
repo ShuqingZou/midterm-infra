@@ -27,29 +27,36 @@ jobs:
         run: |
           docker compose up -d
           sleep 20
-
-      - name: Login to Amazon ECR
-        run: |
-          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
-
+          
+          
       - name: Push to Amazon ECR
         run: |
           TIMESTAMP=$(date +'%Y%m%d-%H%M%S')
           echo "Using TIMESTAMP: $TIMESTAMP"
           echo "TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
 
-          BACKEND_IMAGE_ID=$(docker images --filter=reference="midterm-source_backend" --format "{{.ID}}")
-          FRONTEND_IMAGE_ID=$(docker images --filter=reference="midterm-source_frontend" --format "{{.ID}}")
+          echo "Listing all available images..."
+          docker images  
+          
+          BACKEND_IMAGE_ID=$(docker images --filter=reference="backend-nightly" --format "{{.ID}}")
+          FRONTEND_IMAGE_ID=$(docker images --filter=reference="frontend-nightly" --format "{{.ID}}")
+
+          if [[ -z "$BACKEND_IMAGE_ID" || -z "$FRONTEND_IMAGE_ID" ]]; then
+            echo "Error: Could not find backend-nightly or frontend-nightly images!"
+            exit 1
+          fi
 
           echo "Backend Image ID: $BACKEND_IMAGE_ID"
           echo "Frontend Image ID: $FRONTEND_IMAGE_ID"
+
+          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
 
           docker tag $BACKEND_IMAGE_ID ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:$TIMESTAMP
           docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:$TIMESTAMP
 
           docker tag $FRONTEND_IMAGE_ID ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:$TIMESTAMP
           docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:$TIMESTAMP
-    
+
 
       - name: Launch temporary EC2 instance
         run: |
