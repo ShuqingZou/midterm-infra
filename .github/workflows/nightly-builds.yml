@@ -6,7 +6,60 @@ on:
   workflow_dispatch:
 
 jobs:
+  create-ec2:
+    runs-on: ubuntu-latest
+    outputs:
+      instance_id: ${{ steps.create.outputs.instance_id }}
+      instance_ip: ${{ steps.create.outputs.instance_ip }}
+
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Launch temporary EC2 instance
+        id: create
+        run: |
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --region ${{ secrets.AWS_REGION }} \
+            --image-id ami-04b4f1a9cf54c11d0 \
+            --instance-type t3.micro \
+            --key-name midterm-key \
+            --security-group-ids sg-03a57241aa0650326 \
+            --subnet-id subnet-037010f619e30f145 \
+            --associate-public-ip-address \
+            --query 'Instances[0].InstanceId' \
+            --output text)
+
+          echo "Waiting for EC2 instance ($INSTANCE_ID) to get Public DNS..."
+
+          while true; do
+            INSTANCE_IP=$(aws ec2 describe-instances \
+              --region ${{ secrets.AWS_REGION }} \
+              --instance-ids $INSTANCE_ID \
+              --query 'Reservations[0].Instances[0].PublicDnsName' \
+              --output text)
+
+            if [[ "$INSTANCE_IP" != "None" && "$INSTANCE_IP" != "" ]]; then
+              break
+            fi
+
+            echo "Waiting for Public DNS..."
+            sleep 5
+          done
+
+          echo "Instance ID: $INSTANCE_ID"
+          echo "Instance IP: $INSTANCE_IP"
+
+          echo "::set-output name=instance_id::$INSTANCE_ID"
+          echo "::set-output name=instance_ip::$INSTANCE_IP"
+
   build-and-test:
+    needs: create-ec2
     runs-on: ubuntu-latest
 
     steps:
@@ -42,15 +95,70 @@ jobs:
             backend-nightly.tar
             frontend-nightly.tar
 
-  push-to-ecr:
-    needs: build-and-test
+
+  smoke-test:
+    needs: [create-ec2, build-and-test]
     runs-on: ubuntu-latest
 
     steps:
-      - name: Set Timestamp
-        id: vars
-        run: echo "timestamp=$(date +%Y%m%d%H%M%S)" >> $GITHUB_ENV
+      - name: Debug Instance IP in smoke-test
+        run: |
+          echo "Instance ID in smoke-test: ${{ needs.create-ec2.outputs.instance_id }}"
+          echo "Instance IP in smoke-test: ${{ needs.create-ec2.outputs.instance_ip }}"
 
+      - name: Wait for EC2 to be ready
+        run: |
+          sleep 60
+
+      - name: SSH into EC2 and run Smoke Test
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ needs.create-ec2.outputs.instance_ip }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          script: |
+            sudo apt update && sudo apt install -y docker.io docker-compose git
+            sudo systemctl start docker
+            sudo usermod -aG docker $USER
+            newgrp docker
+            sleep 10
+
+            if [ ! -d "/home/ubuntu/midterm-source" ]; then
+              git clone https://github.com/ShuqingZou/midterm-source.git /home/ubuntu/midterm-source
+            fi
+
+            cd /home/ubuntu/midterm-source
+            git pull origin main
+            
+            export REACT_APP_API_URL=http://localhost:8800
+
+            DB_HOST="${{ secrets.DB_HOST }}"
+            export DB_USER="root"
+            export DB_PASSWORD="${{ secrets.DB_PASSWORD }}"
+            export DB_NAME="test"
+            export DB_PORT="3306"
+
+            echo "DB_HOST is set to: $DB_HOST"
+
+            sudo docker-compose up -d
+            sleep 20 
+
+            echo "Checking running containers..."
+            sudo docker ps -a
+
+            echo "Checking backend logs..."
+            sudo docker logs $(sudo docker ps -q --filter ancestor=backend-nightly:latest)
+
+            echo "Running Smoke Tests..."
+            curl -f http://localhost:8800/ || exit 1
+            curl -f http://localhost:8800/books || exit 1
+            curl -f http://localhost:3000/ || exit 1
+
+  push-to-ecr:
+    needs: smoke-test
+    runs-on: ubuntu-latest
+
+    steps:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
@@ -74,105 +182,69 @@ jobs:
         run: |
           aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
 
-      - name: Push new Image with Timestamp Tag
+      - name: Move `latest` to `previous`
         run: |
+          set -e
+
           BACKEND_REPO="bookapp/backend"
           FRONTEND_REPO="bookapp/frontend"
-          TIMESTAMP="${{ env.timestamp }}"
+
+          LATEST_BACKEND_DIGEST=$(aws ecr describe-images --repository-name "$BACKEND_REPO" --query "imageDetails[?contains(imageTags, 'latest')].imageDigest" --output text || echo "")
+          LATEST_FRONTEND_DIGEST=$(aws ecr describe-images --repository-name "$FRONTEND_REPO" --query "imageDetails[?contains(imageTags, 'latest')].imageDigest" --output text || echo "")
+
+          # backend
+          if [[ -n "$LATEST_BACKEND_DIGEST" ]]; then
+            echo "delete previous if exits"
+            aws ecr batch-delete-image --repository-name "$BACKEND_REPO" --image-ids imageTag=previous || true
+
+            echo "let latest be previous"
+            IMAGE_MANIFEST=$(aws ecr batch-get-image --repository-name "$BACKEND_REPO" --image-ids imageDigest="$LATEST_BACKEND_DIGEST" --query 'images[0].imageManifest' --output text)
+            aws ecr put-image --repository-name "$BACKEND_REPO" --image-tag previous --image-manifest "$IMAGE_MANIFEST"
+
+            echo "delete latest tag"
+            aws ecr batch-delete-image --repository-name "$BACKEND_REPO" --image-ids imageTag=latest || true
+          else
+            echo "no latest, skip"
+          fi
+
+          # frontend
+          if [[ -n "$LATEST_FRONTEND_DIGEST" ]]; then
+            echo "delete previous if exits"
+            aws ecr batch-delete-image --repository-name "$FRONTEND_REPO" --image-ids imageTag=previous || true
+
+            echo "let latest be previous"
+            IMAGE_MANIFEST=$(aws ecr batch-get-image --repository-name "$FRONTEND_REPO" --image-ids imageDigest="$LATEST_FRONTEND_DIGEST" --query 'images[0].imageManifest' --output text)
+            aws ecr put-image --repository-name "$FRONTEND_REPO" --image-tag previous --image-manifest "$IMAGE_MANIFEST"
+
+            echo "delete latest tag"
+            aws ecr batch-delete-image --repository-name "$FRONTEND_REPO" --image-ids imageTag=latest || true
+          else
+            echo "no latest, skip"
+          fi
+
+      - name: Push new `latest` Image
+        run: |
+          set -e
+
+          BACKEND_REPO="bookapp/backend"
+          FRONTEND_REPO="bookapp/frontend"
           AWS_ACCOUNT_ID="${{ secrets.AWS_ACCOUNT_ID }}"
           AWS_REGION="${{ secrets.AWS_REGION }}"
 
-          docker tag backend-nightly:latest "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$BACKEND_REPO:$TIMESTAMP"
-          docker push "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$BACKEND_REPO:$TIMESTAMP"
+          echo "push new latest"
 
-          docker tag frontend-nightly:latest "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$FRONTEND_REPO:$TIMESTAMP"
-          docker push "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$FRONTEND_REPO:$TIMESTAMP"
+          # backend
+          docker tag backend-nightly:latest "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$BACKEND_REPO:latest"
+          docker push "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$BACKEND_REPO:latest"
 
-  create-ec2:
-    needs: push-to-ecr
-    runs-on: ubuntu-latest
-    outputs:
-      instance_id: ${{ steps.create.outputs.instance_id }}
-      instance_ip: ${{ steps.create.outputs.instance_ip }}
+          # frontend
+          docker tag frontend-nightly:latest "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$FRONTEND_REPO:latest"
+          docker push "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$FRONTEND_REPO:latest"
 
-    steps:
-      - name: Launch temporary EC2 instance
-        id: create
-        run: |
-          INSTANCE_ID=$(aws ec2 run-instances \
-          --region ${{ secrets.AWS_REGION }} \
-          --image-id ami-04b4f1a9cf54c11d0 \
-          --instance-type t3.micro \
-          --key-name midterm-key \
-          --security-group-ids sg-03a57241aa0650326 \
-          --subnet-id subnet-037010f619e30f145 \
-          --associate-public-ip-address \
-          --query 'Instances[0].InstanceId' \
-          --output text)
-            
-          echo "Waiting for EC2 instance ($INSTANCE_ID) to get Public DNS..."
-            
-          while true; do
-            INSTANCE_IP=$(aws ec2 describe-instances \
-              --region ${{ secrets.AWS_REGION }} \
-              --instance-ids $INSTANCE_ID \
-              --query 'Reservations[0].Instances[0].PublicDnsName' \
-              --output text)
-            
-            if [[ "$INSTANCE_IP" != "None" && "$INSTANCE_IP" != "" ]]; then
-                break
-            fi
-            
-            echo "Waiting for Public DNS..."
-            sleep 5
-          done
-            
-          echo "Instance ID: $INSTANCE_ID"
-          echo "Instance IP: $INSTANCE_IP"
-            
-          echo "::set-output name=instance_id::$INSTANCE_ID"
-          echo "::set-output name=instance_ip::$INSTANCE_IP"
-
-  smoke-test:
-    needs: [create-ec2]
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: SSH into EC2 and run Smoke Test
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ needs.create-ec2.outputs.instance_ip }}
-          username: ubuntu
-          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
-          script: |
-            TIMESTAMP="${{ env.timestamp }}"
-            aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
-            
-            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:$TIMESTAMP
-            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:$TIMESTAMP
-
-            sudo docker-compose up -d
-
-            curl -f http://localhost:8800/ || exit 1
-            curl -f http://localhost:8800/books || exit 1
-            curl -f http://localhost:3000/ || exit 1
-
-  delete-ecr-if-fail:
-    needs: smoke-test
-    runs-on: ubuntu-latest
-    if: failure()
-
-    steps:
-      - name: Delete latest images from ECR
-        run: |
-          TIMESTAMP="${{ env.timestamp }}"
-          aws ecr batch-delete-image --repository-name bookapp/backend --image-ids imageTag=$TIMESTAMP || true
-          aws ecr batch-delete-image --repository-name bookapp/frontend --image-ids imageTag=$TIMESTAMP || true
 
   deploy-qa:
-    needs: smoke-test
+    needs: push-to-ecr
     runs-on: ubuntu-latest
-    if: success()
 
     steps:
       - name: SSH into QA EC2 and Deploy
@@ -182,18 +254,64 @@ jobs:
           username: ubuntu
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           script: |
-            TIMESTAMP="${{ env.timestamp }}"
+            echo "Updating system..."
+            sudo apt update && sudo apt install -y docker.io docker-compose awscli
+            sudo systemctl start docker
+
+            echo "Logging into Amazon ECR..."
             aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
             
+            echo "Navigating to deploy directory..."
+            cd /home/ubuntu/deploy
+
+            echo "Stopping existing containers..."
+            sudo docker-compose down || true
+
+            echo "Pulling latest images..."
             sudo docker-compose pull
+
+            echo "Starting containers..."
             sudo docker-compose up -d
 
+            echo "Waiting for services to start..."
+            sleep 20
+
+            echo "Checking running containers..."
+            sudo docker ps
+
+            echo "Running API health checks..."
+            curl -f http://localhost:8800/ || (echo "Backend failed!" && exit 1)
+            curl -f http://localhost:8800/books || (echo "Books API failed!" && exit 1)
+            curl -f http://localhost:3000/ || (echo "Frontend failed!" && exit 1)
+
+            echo "Deployment to QA completed successfully!"
+
+
   cleanup:
-    needs: [create-ec2, smoke-test]
+    needs: [ create-ec2, smoke-test, push-to-ecr ]
     runs-on: ubuntu-latest
     if: always()
 
     steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Debug Instance ID before termination
+        run: |
+          echo "Instance ID: ${{ needs.create-ec2.outputs.instance_id }}"
+
       - name: Terminate temporary EC2 instance
         run: |
-          aws ec2 terminate-instances --region ${{ secrets.AWS_REGION }} --instance-ids ${{ needs.create-ec2.outputs.instance_id }}
+          INSTANCE_ID="${{ needs.create-ec2.outputs.instance_id }}"
+
+          if [ -z "$INSTANCE_ID" ]; then
+            echo "Error: No instance ID found. Skipping termination."
+            exit 1
+          fi
+
+          aws ec2 terminate-instances --region ${{ secrets.AWS_REGION }} --instance-ids $INSTANCE_ID
