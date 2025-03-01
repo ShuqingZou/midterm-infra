@@ -27,7 +27,8 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Generate Timestamp Tag
-        run: echo "TIMESTAMP=$(date +'%Y%m%d-%H%M%S')" >> "$GITHUB_ENV"
+        id: generate_tag
+        run: echo "::set-output name=timestamp::$(date +'%Y%m%d-%H%M%S')"
 
       - name: Build Docker Images
         run: |
@@ -80,8 +81,8 @@ jobs:
             --query 'Reservations[0].Instances[0].PublicDnsName' \
             --output text)
 
-          echo "instance_id=$INSTANCE_ID" >> "$GITHUB_ENV"
-          echo "instance_ip=$INSTANCE_IP" >> "$GITHUB_ENV"
+          echo "::set-output name=instance_id::$INSTANCE_ID"
+          echo "::set-output name=instance_ip::$INSTANCE_IP"
 
   smoke-test:
     needs: create-ec2
@@ -90,7 +91,7 @@ jobs:
       - name: SSH into EC2 and run Smoke Test
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ env.instance_ip }}
+          host: ${{ needs.create-ec2.outputs.instance_ip }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           script: |
@@ -109,6 +110,24 @@ jobs:
             curl -f http://localhost:8800/ || exit 1
             curl -f http://localhost:8800/books || exit 1
             curl -f http://localhost:3000/ || exit 1
+
+  cleanup-ecr:
+    needs: smoke-test
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Delete failed images from ECR
+        run: |
+          aws ecr batch-delete-image --repository-name bookapp/backend --image-ids imageTag=${{ needs.build-and-push.outputs.timestamp }} || true
+          aws ecr batch-delete-image --repository-name bookapp/frontend --image-ids imageTag=${{ needs.build-and-push.outputs.timestamp }} || true
 
   deploy-qa:
     needs: smoke-test
@@ -140,10 +159,30 @@ jobs:
             sudo docker-compose up -d
 
   cleanup:
-    needs: [create-ec2, smoke-test, deploy-qa]
+    needs: [ create-ec2, smoke-test, deploy-qa]
     runs-on: ubuntu-latest
     if: always()
+
     steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Debug Instance ID before termination
+        run: |
+          echo "Instance ID: ${{ needs.create-ec2.outputs.instance_id }}"
+
       - name: Terminate temporary EC2 instance
         run: |
-          aws ec2 terminate-instances --region ${{ secrets.AWS_REGION }} --instance-ids ${{ env.instance_id }}
+          INSTANCE_ID="${{ needs.create-ec2.outputs.instance_id }}"
+          
+          if [ -z "$INSTANCE_ID" ]; then
+            echo "Error: No instance ID found. Skipping termination."
+            exit 1
+          fi
+          
+          aws ec2 terminate-instances --region ${{ secrets.AWS_REGION }} --instance-ids $INSTANCE_ID
