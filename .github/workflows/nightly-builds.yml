@@ -110,49 +110,55 @@ jobs:
         run: |
           sleep 60
 
-      - name: SSH into EC2 and run Smoke Test
+      - name: Download Docker images
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-images
+
+      - name: SCP Docker images to EC2
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ needs.create-ec2.outputs.instance_ip }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          source: "backend-nightly.tar,frontend-nightly.tar"
+          target: "/home/ubuntu/docker-images"
+
+      - name: SSH into EC2 and Prepare Environment
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ needs.create-ec2.outputs.instance_ip }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           script: |
-            sudo apt update && sudo apt install -y docker.io docker-compose git
-            sudo systemctl start docker
-            sudo usermod -aG docker $USER
-            newgrp docker
-            sleep 10
+            echo "Creating .env file..."
+            cat <<EOF > /home/ubuntu/.env
+            REACT_APP_API_URL=http://localhost:8800
+            DB_HOST=${{ secrets.DB_HOST }}
+            DB_USER=root
+            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+            DB_NAME=test
+            DB_PORT=3306
+            EOF
 
-            if [ ! -d "/home/ubuntu/midterm-source" ]; then
-              git clone https://github.com/ShuqingZou/midterm-source.git /home/ubuntu/midterm-source
-            fi
+            echo "Loading Docker images..."
+            docker load -i /home/ubuntu/docker-images/backend-nightly.tar
+            docker load -i /home/ubuntu/docker-images/frontend-nightly.tar
 
-            cd /home/ubuntu/midterm-source
-            git pull origin main
-            
-            export REACT_APP_API_URL=http://localhost:8800
-
-            DB_HOST="${{ secrets.DB_HOST }}"
-            export DB_USER="root"
-            export DB_PASSWORD="${{ secrets.DB_PASSWORD }}"
-            export DB_NAME="test"
-            export DB_PORT="3306"
-
-            echo "DB_HOST is set to: $DB_HOST"
-
-            sudo docker-compose up -d
+            echo "Starting Docker containers..."
+            docker-compose --env-file /home/ubuntu/.env up -d
             sleep 20 
 
             echo "Checking running containers..."
-            sudo docker ps -a
-
-            echo "Checking backend logs..."
-            sudo docker logs $(sudo docker ps -q --filter ancestor=backend-nightly:latest)
+            docker ps -a
 
             echo "Running Smoke Tests..."
             curl -f http://localhost:8800/ || exit 1
             curl -f http://localhost:8800/books || exit 1
             curl -f http://localhost:3000/ || exit 1
+
+            echo "Smoke test passed!"
+
 
   push-to-ecr:
     needs: smoke-test
