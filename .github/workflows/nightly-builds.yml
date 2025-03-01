@@ -101,11 +101,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Debug Instance IP in smoke-test
-        run: |
-          echo "Instance ID in smoke-test: ${{ needs.create-ec2.outputs.instance_id }}"
-          echo "Instance IP in smoke-test: ${{ needs.create-ec2.outputs.instance_ip }}"
-
       - name: Wait for EC2 to be ready
         run: |
           sleep 60
@@ -141,11 +136,10 @@ jobs:
 
             echo "Adding user to Docker group..."
             sudo usermod -aG docker ubuntu
-            newgrp docker
 
             echo "Checking Docker version..."
-            docker --version
-            docker-compose --version
+            sudo docker --version
+            sudo docker-compose --version
 
             echo "Creating .env file..."
             cat <<EOF > /home/ubuntu/.env
@@ -158,15 +152,15 @@ jobs:
             EOF
 
             echo "Loading Docker images..."
-            docker load -i /home/ubuntu/docker-images/backend-nightly.tar
-            docker load -i /home/ubuntu/docker-images/frontend-nightly.tar
+            sudo docker load -i /home/ubuntu/docker-images/backend-nightly.tar
+            sudo docker load -i /home/ubuntu/docker-images/frontend-nightly.tar
 
             echo "Starting Docker containers..."
-            docker-compose --env-file /home/ubuntu/.env up -d
+            sudo docker-compose --env-file /home/ubuntu/.env up -d
             sleep 20 
 
             echo "Checking running containers..."
-            docker ps -a
+            sudo docker ps -a
 
             echo "Running Smoke Tests..."
             curl -f http://localhost:8800/ || exit 1
@@ -174,6 +168,7 @@ jobs:
             curl -f http://localhost:3000/ || exit 1
 
             echo "Smoke test passed!"
+
 
   push-to-ecr:
     needs: smoke-test
