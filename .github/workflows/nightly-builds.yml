@@ -258,7 +258,7 @@ jobs:
             echo "Running API health checks..."
             curl -f http://localhost:8800/ || (echo "Backend failed!" && exit 1)
             curl -f http://localhost:8800/books || (echo "Books API failed!" && exit 1)
-            curl -f https://shuqing.mom/ || (echo "Frontend failed!" && exit 1)
+            curl -f http://localhost:3000/ || (echo "Frontend failed!" && exit 1)
 
             echo "Deployment to QA completed successfully!"
 
