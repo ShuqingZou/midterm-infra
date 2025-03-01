@@ -8,6 +8,8 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    outputs:
+      timestamp: ${{ steps.generate_tag.outputs.timestamp }}  # 传递给后续 Job
     steps:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v2
@@ -28,7 +30,10 @@ jobs:
 
       - name: Generate Timestamp Tag
         id: generate_tag
-        run: echo "::set-output name=timestamp::$(date +'%Y%m%d-%H%M%S')"
+        run: |
+          TIMESTAMP=$(date +'%Y%m%d-%H%M%S')
+          echo "::set-output name=timestamp::$TIMESTAMP"  # 传递给后续 Job
+          echo "TIMESTAMP=$TIMESTAMP" >> "$GITHUB_ENV"   # 仅本 Job 内部使用
 
       - name: Build Docker Images
         run: |
@@ -43,12 +48,15 @@ jobs:
         run: |
           docker tag backend-nightly:${{ env.TIMESTAMP }} ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:${{ env.TIMESTAMP }}
           docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:${{ env.TIMESTAMP }}
-
+          
           docker tag frontend-nightly:${{ env.TIMESTAMP }} ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:${{ env.TIMESTAMP }}
           docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:${{ env.TIMESTAMP }}
 
   create-ec2:
     runs-on: ubuntu-latest
+    outputs:
+      instance_id: ${{ steps.create.outputs.instance_id }}
+      instance_ip: ${{ steps.create.outputs.instance_ip }}
     needs: build-and-push
     steps:
       - name: Configure AWS Credentials
@@ -85,7 +93,7 @@ jobs:
           echo "::set-output name=instance_ip::$INSTANCE_IP"
 
   smoke-test:
-    needs: create-ec2
+    needs: [create-ec2, build-and-push]
     runs-on: ubuntu-latest
     steps:
       - name: SSH into EC2 and run Smoke Test
@@ -100,8 +108,8 @@ jobs:
 
             aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
             
-            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:${{ env.TIMESTAMP }}
-            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:${{ env.TIMESTAMP }}
+            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:${{ needs.build-and-push.outputs.timestamp }}
+            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:${{ needs.build-and-push.outputs.timestamp }}
             
             sudo docker-compose up -d
 
@@ -149,17 +157,20 @@ jobs:
           username: ubuntu
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           script: |
+            echo "Deploying version: ${{ needs.build-and-push.outputs.timestamp }}"
+
             aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
             
             sudo docker-compose down || true
             
-            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:${{ env.TIMESTAMP }}
-            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:${{ env.TIMESTAMP }}
+            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:${{ needs.build-and-push.outputs.timestamp }}
+            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:${{ needs.build-and-push.outputs.timestamp }}
 
             sudo docker-compose up -d
 
+
   cleanup:
-    needs: [ create-ec2, smoke-test, deploy-qa]
+    needs: [ create-ec2, smoke-test]
     runs-on: ubuntu-latest
     if: always()
 
