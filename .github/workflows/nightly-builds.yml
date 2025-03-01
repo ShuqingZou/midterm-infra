@@ -95,10 +95,10 @@ jobs:
 
             echo "Updating package lists..."
             sudo apt update -y
-            
-            echo "Installing dependencies: AWS CLI, Docker, Docker Compose..."
-            sudo apt install -y awscli docker.io
-            
+
+            echo "Installing dependencies: Docker, Docker Compose..."
+            sudo apt install -y docker.io
+
             echo "Starting Docker service..."
             sudo systemctl enable docker
             sudo systemctl start docker
@@ -109,6 +109,9 @@ jobs:
             echo "Installing Docker Compose..."
             sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
             sudo chmod +x /usr/local/bin/docker-compose
+
+            echo "Installing AWS CLI via snap..."
+            sudo snap install aws-cli --classic
 
             echo "Checking installed versions..."
             docker --version
@@ -132,6 +135,7 @@ jobs:
             curl -f http://localhost:8800/ || exit 1
             curl -f http://localhost:8800/books || exit 1
             curl -f http://localhost:3000/ || exit 1
+
 
 
       - name: Delete failed images from ECR
