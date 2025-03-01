@@ -126,6 +126,37 @@ jobs:
           echo "Smoke test failed. Cleaning up images from ECR..."
           aws ecr batch-delete-image --repository-name bookapp/backend --image-ids imageTag=$TIMESTAMP
           aws ecr batch-delete-image --repository-name bookapp/frontend --image-ids imageTag=$TIMESTAMP
+          
+          
+      - name: Deploy to QA EC2
+        if: success()
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.QA_EC2_IP }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          script: |
+             aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+      
+             echo "Stopping and removing old containers..."
+             sudo docker-compose down
+
+             echo "Cleaning up old images, containers, and volumes..."
+             sudo docker system prune -af --volumes
+
+             echo "Removing old backend images except latest..."
+             sudo docker rmi -f $(sudo docker images --format '{{.Repository}}:{{.Tag}}' | grep 'bookapp/backend' | grep -v "$TIMESTAMP") || true
+
+             echo "Removing old frontend images except latest..."
+             sudo docker rmi -f $(sudo docker images --format '{{.Repository}}:{{.Tag}}' | grep 'bookapp/frontend' | grep -v "$TIMESTAMP") || true
+
+             echo "Pulling latest backend and frontend images..."
+             sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:$TIMESTAMP
+             sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:$TIMESTAMP
+
+             echo "Starting new containers..."
+             sudo docker-compose up -d
+
 
       - name: Terminate Temporary EC2 Instance
         if: always()
