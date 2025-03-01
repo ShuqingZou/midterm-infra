@@ -58,6 +58,13 @@ jobs:
           docker tag $FRONTEND_IMAGE_ID ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:$TIMESTAMP
           docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:$TIMESTAMP
 
+      - name: Verify Images in ECR
+        run: |
+          echo "Checking images in ECR..."
+          aws ecr describe-images --repository-name bookapp/backend --query "imageDetails[?imageTags[?@=='$TIMESTAMP']].imageTags" --output json
+          aws ecr describe-images --repository-name bookapp/frontend --query "imageDetails[?imageTags[?@=='$TIMESTAMP']].imageTags" --output json
+
+
       - name: Launch temporary EC2 instance
         run: |
           INSTANCE_ID=$(aws ec2 run-instances \
@@ -126,6 +133,12 @@ jobs:
 
             echo "Logging into Amazon ECR..."
             aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+
+            echo "TIMESTAMP in EC2: $TIMESTAMP"
+
+            echo "Checking if images exist in ECR..."
+            aws ecr describe-images --repository-name bookapp/backend --query "imageDetails[?imageTags[?@=='$TIMESTAMP']].imageTags" --output json
+            aws ecr describe-images --repository-name bookapp/frontend --query "imageDetails[?imageTags[?@=='$TIMESTAMP']].imageTags" --output json
 
             echo "Pulling images from ECR..."
             sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:$TIMESTAMP
