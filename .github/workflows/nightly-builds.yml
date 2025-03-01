@@ -24,6 +24,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y docker-compose
 
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
       - name: Build and tag Docker images
         run: |
           TIMESTAMP=$(date "+%Y%m%d.%H%M%S")
@@ -37,13 +44,13 @@ jobs:
 
       - name: Push Docker Images to ECR
         run: |
-          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com
+          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
 
-          docker tag backend:$TIMESTAMP ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/backend:$TIMESTAMP
-          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/backend:$TIMESTAMP
+          docker tag backend:$TIMESTAMP ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/backend:$TIMESTAMP
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/backend:$TIMESTAMP
 
-          docker tag frontend:$TIMESTAMP ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/frontend:$TIMESTAMP
-          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/frontend:$TIMESTAMP
+          docker tag frontend:$TIMESTAMP ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/frontend:$TIMESTAMP
+          docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/frontend:$TIMESTAMP
 
       - name: Launch Temporary EC2 Instance
         id: create_ec2
@@ -83,10 +90,10 @@ jobs:
 
             echo "DB_HOST is set to: $DB_HOST"
 
-            aws ecr get-login-password --region $AWS_REGION | sudo docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com
+            aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
 
-            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/backend:$TIMESTAMP
-            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/frontend:$TIMESTAMP
+            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/backend:$TIMESTAMP
+            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/frontend:$TIMESTAMP
             sudo docker-compose up -d
             sleep 20
 
@@ -110,10 +117,10 @@ jobs:
           username: ubuntu
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           script: |
-            aws ecr get-login-password --region $AWS_REGION | sudo docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com
+            aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
             sudo docker-compose down
-            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/backend:$TIMESTAMP
-            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/frontend:$TIMESTAMP
+            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/backend:$TIMESTAMP
+            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/frontend:$TIMESTAMP
             sudo docker-compose up -d
 
       - name: Terminate Temporary EC2 Instance
