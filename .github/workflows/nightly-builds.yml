@@ -67,14 +67,34 @@ jobs:
             --query 'Instances[0].InstanceId' \
             --output text)
 
-          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
-          aws ec2 wait instance-running --instance-ids $INSTANCE_ID
+          echo "Waiting for EC2 instance ($INSTANCE_ID) to get Public DNS..."
+
+          while true; do
+            INSTANCE_IP=$(aws ec2 describe-instances \
+              --region ${{ secrets.AWS_REGION }} \
+              --instance-ids $INSTANCE_ID \
+              --query 'Reservations[0].Instances[0].PublicDnsName' \
+              --output text)
+
+            if [[ "$INSTANCE_IP" != "None" && "$INSTANCE_IP" != "" ]]; then
+              break
+            fi
+
+            echo "Waiting for Public DNS..."
+            sleep 5
+          done
+
+          echo "Instance ID: $INSTANCE_ID"
+          echo "Instance IP: $INSTANCE_IP"
+
+          echo "::set-output name=instance_id::$INSTANCE_ID"
+          echo "::set-output name=instance_ip::$INSTANCE_IP"
 
       - name: Run Smoke Test on EC2
         id: smoke_test
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ env.INSTANCE_ID }}
+          host: ${{ needs.create-ec2.outputs.instance_ip }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           script: |
@@ -93,8 +113,8 @@ jobs:
 
             aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
 
-            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/backend:$TIMESTAMP
-            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/frontend:$TIMESTAMP
+            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:$TIMESTAMP
+            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:$TIMESTAMP
             sudo docker-compose up -d
             sleep 20
 
@@ -107,8 +127,8 @@ jobs:
         if: failure() && steps.smoke_test.outcome == 'failure'
         run: |
           echo "Smoke test failed. Cleaning up images from ECR..."
-          aws ecr batch-delete-image --repository-name backend --image-ids imageTag=$TIMESTAMP
-          aws ecr batch-delete-image --repository-name frontend --image-ids imageTag=$TIMESTAMP
+          aws ecr batch-delete-image --repository-name bookapp/backend --image-ids imageTag=$TIMESTAMP
+          aws ecr batch-delete-image --repository-name bookapp/frontend --image-ids imageTag=$TIMESTAMP
 
       - name: Deploy to QA EC2
         if: success()
@@ -120,10 +140,10 @@ jobs:
           script: |
             aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
             sudo docker-compose down
-            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/backend:$TIMESTAMP
-            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/frontend:$TIMESTAMP
+            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/backend:$TIMESTAMP
+            sudo docker pull ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/bookapp/frontend:$TIMESTAMP
             sudo docker-compose up -d
 
       - name: Terminate Temporary EC2 Instance
         run: |
-          aws ec2 terminate-instances --instance-ids ${{ env.INSTANCE_ID }}
+          aws ec2 terminate-instances --instance-ids ${{ needs.create-ec2.outputs.instance_id }}
